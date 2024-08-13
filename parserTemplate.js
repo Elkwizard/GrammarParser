@@ -43,8 +43,11 @@ class AST {
 			if (node instanceof match) fn(node);
 		});
 	}
+	static is(value) {
+		return Array.isArray(value) || value instanceof AST;
+	}
 	static transformAll(node, transf) {
-		if (typeof node === "object")
+		if (AST.is(node))
 			for (const key in node) {
 				const result = AST.transformAll(node[key], transf);
 				if (result === false) delete node[key];
@@ -54,7 +57,7 @@ class AST {
 		return node;
 	}
 	static forAll(node, fn) {
-		if (typeof node === "object")
+		if (AST.is(node))
 			for (const key in node)
 				AST.forAll(node[key], fn);
 		fn(node);
