@@ -1,5 +1,5 @@
 # Grammar Parser
-A parser generator for my grammar file format (.grammar, though I'm sure it's been used before).
+A parser generator for my grammar file format (`.grammar`, though I'm sure it's been used before).
 
 ## Example
 
