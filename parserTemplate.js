@@ -1,16 +1,37 @@
 class AST {
 	static REPLACE_KEY = Symbol("replace");
+	static START_KEY = Symbol("start");
+	static END_KEY = Symbol("end");
+	static TOKENS_KEY = Symbol("tokens");
 
-	finalize() {
-		const { REPLACE_KEY } = AST;
+	constructor(startIndex) {
+		this[AST.START_KEY] = startIndex;
+	}
+
+	get textContent() {
+		const { START_KEY, END_KEY, TOKENS_KEY } = AST;
+		if (!(START_KEY in this && END_KEY in this && TOKENS_KEY in this))
+			return "";
+		const start = this[TOKENS_KEY][this[START_KEY]];
+		const end = this[TOKENS_KEY][this[END_KEY]];
+		return start.source.slice(
+			start.position,
+			end.position + end.content.length
+		);
+	}
+
+	finalize(tokens) {
+		const { REPLACE_KEY, TOKENS_KEY } = AST;
 		const replacement = this[REPLACE_KEY];
 		if (replacement && !Object.keys(this).length)
 			return this[REPLACE_KEY];
 		delete this[REPLACE_KEY];
+		this[TOKENS_KEY] = tokens;
 		return this;
 	}
-	setProperty(node, value) {
-		const { REPLACE_KEY } = AST;
+
+	setProperty(node, value, index) {
+		const { REPLACE_KEY, END_KEY } = AST;
 		const key = node.label ?? REPLACE_KEY;
 		const array = node.repeated;
 
@@ -18,34 +39,44 @@ class AST {
 			if (key === REPLACE_KEY) this[REPLACE_KEY] = null;
 			else this[key].push(value);
 		} else this[key] = array ? [value] : value;
+
+		this[END_KEY] = index;
 	}
+
 	copy() {
 		return Object.assign(new this.constructor(), this);
 	}
+
 	clear() {
 		for (const key in this)
 			delete this[key];
 	}
+
 	transformAll(transf) {
 		AST.transformAll(this, transf);
 	}
+
 	transform(match, transf) {
 		this.transformAll(node => {
 			if (node instanceof match) return transf(node);
 			return node;
 		});
 	}
+
 	forAll(fn) {
 		AST.forAll(this, fn);
 	}
+
 	forEach(match, fn) {
 		this.forAll(node => {
 			if (node instanceof match) fn(node);
 		});
 	}
+
 	static is(value) {
 		return Array.isArray(value) || value instanceof AST;
 	}
+
 	static transformAll(node, transf) {
 		if (AST.is(node))
 			for (const key in node) {
@@ -56,6 +87,7 @@ class AST {
 		node = transf(node);
 		return node;
 	}
+
 	static forAll(node, fn) {
 		if (AST.is(node))
 			for (const key in node)
@@ -129,13 +161,13 @@ const parse = (function () {
 	
 		function matchTerm(graph, index, termStack = []) {
 			termStack.push(graph.name);
-			const match = matchFromNode(new graph.astClass(), graph.start, index, termStack);
+			const match = matchFromNode(new graph.astClass(index), graph.start, index, termStack);
 			termStack.pop();
 	
 			if (match === null)
 				return null;
 	
-			match[0] = match[0].finalize();
+			match[0] = match[0].finalize(tokens);
 	
 			return match;
 		}
@@ -174,7 +206,7 @@ const parse = (function () {
 				if (node.enclose) {
 					const enclosed = result.copy().finalize();
 					result.clear();
-					result.setProperty(node, enclosed);
+					result.setProperty(node, enclosed, index);
 				}
 				return index;
 			}
@@ -203,8 +235,8 @@ const parse = (function () {
 					index++;
 				} else return error(`Unexpected token, expected '${match}'`, index, termStack);
 			}
-	
-			result.setProperty(node, value);
+
+			result.setProperty(node, value, index - 1);
 	
 			return index;
 		}
