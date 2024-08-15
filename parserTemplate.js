@@ -133,7 +133,7 @@ const parse = (function () {
 		definitions[name] = Graph.hydrate(definitions[name]);
 
 	for (const name of definitionNames)
-		definitions[name].preprocess(definitions, types, AST);
+		definitions[name].preprocess(definitions, AST);
 	
 	function parse(source) {
 		source = source.replace(/\r/g, "");
@@ -146,8 +146,9 @@ const parse = (function () {
 
 		let lastErrorPosition = -1;
 		let lastError = null;
+		let termStack = [];
 	
-		function error(message, index, termStack) {
+		function error(message, index) {
 			const position = index ?? 0;
 			if (position > lastErrorPosition) {
 				lastErrorPosition = position;
@@ -158,10 +159,12 @@ const parse = (function () {
 	
 			return null;
 		}
+
+		const OUT_OF_BOUNDS = "Unexpected end of input";
 	
-		function matchTerm(graph, index, termStack = []) {
+		function matchTerm(graph, index) {
 			termStack.push(graph.name);
-			const match = matchFromNode(new graph.astClass(index), graph.start, index, termStack);
+			const match = matchFromNode(new graph.astClass(index), graph.start, index);
 			termStack.pop();
 	
 			if (match === null)
@@ -171,75 +174,148 @@ const parse = (function () {
 	
 			return match;
 		}
+
+		const MATCH_TYPES = [
+			(result, node, index) => {
+				return index;
+			}, (result, node, index) => {
+				const enclosed = result.copy().finalize();
+				result.clear();
+				result.setProperty(node, enclosed, index);
+				return index;
+			}, (result, node, index) => {
+				const term = matchTerm(node.match, index);
+				if (term === null) return null;
+				const end = term[1];
+				result.setProperty(node, term[0], end - 1);
+				return end;
+			}, (result, node, index) => {
+				const token = tokens[index];
+				if (!token) return error(OUT_OF_BOUNDS, index);
+				if (token.type.name !== node.match) return error(`Unexpected token, expected token of type '${node.match}'`, index);
+				result.setProperty(node, token.content, index);
+				return index + 1;
+			}, (result, node, index) => {
+				const token = tokens[index];
+				if (!token) return error(OUT_OF_BOUNDS, index);
+				if (token.content !== node.match) return error(`Unexpected token, expected '${node.match}'`, index);
+				result.setProperty(node, token.content, index);
+				return index + 1;
+			}
+		];
 	
-		function matchFromNode(result, node, index, termStack) {
+		function matchFromNode(result, node, index) {
 			while (true) {
-				const match = matchNode(result, node, index, termStack);
+				const match = node.matchType ? matchNode(result, node, index) : index;
 		
 				if (match === null)
 					return null;
 		
 				if (node.to.length === 0) {
 					if (termStack.length === 1 && match < tokens.length)
-						return error(`Grammar couldn't explain complete input`, index, termStack);
+						return error(`Grammar couldn't explain complete input`, index);
 					return [result, match];
 				}
-			
-				if (node.to.length > 1) {
-					for (const to of node.to) {
-						const subMatch = matchFromNode(result.copy(), to, match, termStack);
-						if (subMatch !== null) return subMatch;
-					}
-					
-					return null;
-				}
 
-				node = node.to[0];
+				const token = tokens[match];
+				let { to } = node;
+				if (token) {
+					to = node.literalChoices[token.content] ?? node.typeChoices[token.type.name];
+					if (to === undefined)
+						return error("Unexpected token", match);
+					
+					if (to.length > 1) {
+						for (let i = 0; i < to.length; i++) {
+							const subMatch = matchFromNode(result.copy(), to[i], match);
+							if (subMatch !== null) return subMatch;
+						}
+
+						return null;
+					}
+				}
+	
+				node = to[to.length - 1];
 				index = match;
 			}
 		}
-	
-		function matchNode(result, node, index, termStack) {
-			const { match } = node;
-			
-			if (!match) {
-				if (node.enclose) {
-					const enclosed = result.copy().finalize();
-					result.clear();
-					result.setProperty(node, enclosed, index);
-				}
+
+		function matchNode(result, node, index) {
+			if (node.match === null) {
+				const enclosed = result.copy().finalize();
+				result.clear();
+				result.setProperty(node, enclosed, index);
 				return index;
 			}
-	
-			let value;
-	
-			const token = tokens[index];
 
-			if (!token) 
-				return error("Unexpected end of input", index, termStack);
-
-			if (node.reference) {
-				if (node.terminal) {
-					if (token.type === match) {
-						value = token.content;
-						index++;
-					} else return error(`Unexpected token, expected a token of type '${match}'`, index, termStack);
-				} else {
-					const term = matchTerm(match, index, termStack);
+			switch (node.matchType) {
+				case 2: {
+					const term = matchTerm(node.match, index);
 					if (term === null) return null;
-					else [value, index] = term;
+					const end = term[1];
+					result.setProperty(node, term[0], end - 1);
+					return end;
 				}
-			} else {
-				if (token.content === match) {
-					value = token.content;
-					index++;
-				} else return error(`Unexpected token, expected '${match}'`, index, termStack);
-			}
 
-			result.setProperty(node, value, index - 1);
-	
-			return index;
+				default: {
+					const token = tokens[index];
+					if (!token) return "Unexpected end of input";
+
+					const failed = (node.terminal ? token.type.name : token.content) !== node.match;
+					if (failed) return null;
+					// if (node.matchType === 3) {
+					// 	if (token.type.name !== node.match) return error(`Unexpected token, expected token of type '${node.match}'`, index);
+					// } else {
+					// 	if (token.content !== node.match) return error(`Unexpected token, expected '${node.match}'`, index);
+					// }
+
+					result.setProperty(node, token.content, index);
+					
+					return index + 1;
+				}
+			}
 		}
+	
+		// function matchNode(result, node, index) {
+		// 	const { match } = node;
+			
+		// 	if (!match) {
+		// 		if (node.enclose) {
+		// 			const enclosed = result.copy().finalize();
+		// 			result.clear();
+		// 			result.setProperty(node, enclosed, index);
+		// 		}
+		// 		return index;
+		// 	}
+	
+		// 	const token = tokens[index];
+
+		// 	if (!token) 
+		// 		return error("Unexpected end of input", index);
+
+		// 	let value;
+
+		// 	if (node.reference) {
+		// 		if (node.terminal) {
+		// 			if (token.type.name === match) {
+		// 				value = token.content;
+		// 				index++;
+		// 			} else return error(`Unexpected token, expected a token of type '${match}'`, index);
+		// 		} else {
+		// 			const term = matchTerm(match, index);
+		// 			if (term === null) return null;
+		// 			else [value, index] = term;
+		// 		}
+		// 	} else {
+		// 		if (token.content === match) {
+		// 			value = token.content;
+		// 			index++;
+		// 		} else return error(`Unexpected token, expected '${match}'`, index);
+		// 	}
+
+		// 	result.setProperty(node, value, index - 1);
+	
+		// 	return index;
+		// }
 	
 		const result = matchTerm(definitions.root, 0);
 	

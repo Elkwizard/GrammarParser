@@ -52,13 +52,110 @@ function tokenize(source) {
 }
 
 class Node {
-	constructor(match, reference = false) {
+	constructor(match = null) {
 		this.match = match;
-		this.reference = reference;
+		this.reference = false;
 		this.from = [];
 		this.to = [];
 		this.label = null;
 		this.enclose = false;
+	}
+	get canComplete() {
+		if (this._canComplete === undefined) {
+			if (!this.match) {
+				if (this.to.length === 0) this._canComplete = true;
+				else this._canComplete = this.to.some(node => node.canComplete);
+			} else this._canComplete = false;
+		}
+
+		return this._canComplete;
+	}
+	get initialTerminals() {
+		if (this._computingTerminals) return [];
+		if (!this._initialTerminals) {
+			this._computingTerminals = true;
+			if (!this.match) {
+				if (this === this._graph.end)
+					this._initialTerminals = this._graph._references
+						.flatMap(ref => ref.to.flatMap(node => node.initialTerminals));
+				else this._initialTerminals = this.to.flatMap(node => node.initialTerminals);
+			} else if (!this.reference || this.terminal)
+				this._initialTerminals = [this];
+			else
+				this._initialTerminals = this._definitions[this.match].start.initialTerminals;
+			this._computingTerminals = false;
+		}
+
+		return this._initialTerminals;
+	}
+	get initialLiterals() {
+		return new Set(
+			this.initialTerminals
+				.filter(node => !node.reference)
+				.map(node => node.match)
+		);
+	}
+	get initialTypes() {
+		return new Set(
+			this.initialTerminals
+				.filter(node => node.reference && node.terminal)
+				.map(node => node.match)
+		);
+	}
+	get initialTerminalTypes() {
+		return new Set(
+			this.initialTerminals
+				.filter(node => !node.reference || node.terminal)
+				.flatMap(node => {
+					const { match } = node;
+					if (node.terminal) return [match];
+					return this.literalTypes(match);
+				})
+		);
+	}
+	literalTypes(match) {
+		const types = [];
+		for (const key in this._types) {
+			const [regex, js] = this._types[key];
+			if (regex.test(match)) {
+				types.push(key);
+				if (!js) break;
+			}
+		}
+		return types;
+	}
+	computeFastChoices() {
+		{ // types
+			this.typeChoices = { };
+
+			for (let i = 0; i < this.to.length; i++) {
+				const node = this.to[i];
+				for (const type of node.initialTerminalTypes)
+					(this.typeChoices[type] ??= []).push(i);
+			}
+		}
+
+		{ // literals
+			this.literalChoices = { }; 
+			
+			const literals = new Set(this.to.flatMap(node => [...node.initialLiterals]));
+			const typeToLiterals = { };
+			for (const literal of literals)
+				for (const type of this.literalTypes(literal))
+					(typeToLiterals[type] ??= []).push(literal);
+
+			for (let i = 0; i < this.to.length; i++) {
+				const node = this.to[i];
+				for (const literal of node.initialLiterals)
+					(this.literalChoices[literal] ??= []).push(i);
+				for (const type of node.initialTypes)
+					for (const literal of typeToLiterals[type] ?? [])
+						(this.literalChoices[literal] ??= []).push(i);
+			}
+
+			for (const key in this.literalChoices)
+				this.literalChoices[key] = [...new Set(this.literalChoices[key])];
+		}
 	}
 	replace(graph) {
 		for (const from of this.from)
@@ -154,60 +251,55 @@ class Graph {
 		for (const node of toRemove)
 			node.merge();
 	}
-	preprocess(definitions, types, asts) {
+	preprocess(definitions, asts) {
 		this.astClass = asts[this.name];
 		this.forEach(node => {
 			if (node.reference)
-				if (node.terminal) node.match = types[node.match];
-				else node.match = definitions[node.match];
+				if (!node.terminal) node.match = definitions[node.match];
+			for (const key in node.typeChoices)
+				node.typeChoices[key] = node.typeChoices[key].map(index => node.to[index]);
+			for (const key in node.literalChoices)
+				node.literalChoices[key] = node.literalChoices[key].map(index => node.to[index]);
 		});
 	}
-	computeTerminals(definitions) {
+	categorize(definitions, types) {
+		this._definitions = definitions;
+		this._types = types;
 		this.forEach(node => {
+			node._definitions = definitions;
+			node._types = types;
+			node._graph = this;
 			if (node.reference && !(node.match in definitions))
 				node.terminal = true;
+
+			if (!node.match) {
+				if (node.enclose) node.matchType = 1;
+				else node.matchType = 0;
+			} else if (node.reference) {
+				if (node.terminal) node.matchType = 3;
+				else node.matchType = 2;
+			} else {
+				node.matchType = 4;
+			}
 		});
-	}
-	computeInitialReferences(definitions) {
-		this.initialReferences = new Set();
-		
-		const getInitialReferences = term => {
-			const { initialNodes } = definitions[term];
-			const references = initialNodes
-				.filter(node => node.reference && node.match in definitions && !this.initialReferences.has(node.match))
-				.map(node => node.match);
-			
-			for (const ref of references) this.initialReferences.add(ref);
-			for (const ref of references)
-				getInitialReferences(ref);
-		};
-
-		getInitialReferences(this.name);
-	}
-	removeInitialRecursion(definitions) {
-		while (true) {
-			const toExpand = this.initialNodes
-				.filter(node => {
-					return	node.reference &&
-							node.match !== this.name &&
-							node.match in definitions &&
-							definitions[node.match].initialReferences.has(this.name);
+		this._references = [];
+		for (const key in definitions) {
+			const graph = definitions[key];
+			graph.forEach(node => {
+				if (node.reference && node.match === this.name)
+					this._references.push(node);
 			});
-
-			for (const node of toExpand)
-				node.replace(definitions[node.match].copy());
-
-			if (!toExpand.length) break;
 		}
-
+	}
+	removeInitialRecursion() {
 		const toRemove = this.initialNodes
 			.filter(node => node.reference && node.match === this.name);
 
 		const end = this.end;
-		this.end = new Node(null);
+		this.end = new Node();
 
 		const start = this.start;
-		this.start = new Node(null);
+		this.start = new Node();
 		this.start.connect(start);
 
 		for (const node of toRemove) {
@@ -223,8 +315,9 @@ class Graph {
 		end.connect(this.end);
 
 		this.simplify();
-
-		this.computeInitialReferences(definitions);
+	}
+	computeFastChoices() {
+		this.forEach(node => node.computeFastChoices());
 	}
 	flatten() {
 		const nodeSet = new Set();
@@ -242,8 +335,11 @@ class Graph {
 		const end = nodes.indexOf(this.end);
 		const result = [];
 		for (let i = 0; i < nodes.length; i++) {
-			const node = { ...nodes[i] };
-			delete node.from;
+			const node = { };
+			const source = nodes[i];
+			for (const key in source)
+				if (key[0] !== "_" && key !== "from")
+					node[key] = source[key];
 			node.to = node.to.map(node => nodes.indexOf(node));
 			result.push(node);
 		}
@@ -252,7 +348,7 @@ class Graph {
 	}
 	static hydrate(graph) {
 		const nodes = graph.nodes.map(node => {
-			const result = new Node(node.match, node.reference);
+			const result = new Node(node.match);
 			Object.assign(result, node);
 			result.baseTo = node.to;
 			result.to = [];
@@ -280,7 +376,9 @@ class AST {
 
 class ReferenceAST extends AST {
 	toGraph() {
-		return new Graph(this.label, new Node(this.children[0], true));
+		const node = new Node(this.children[0]);
+		node.reference = true;
+		return new Graph(this.label, node);
 	}
 }
 
@@ -296,8 +394,8 @@ class ListAST extends AST {
 		this.required = required;
 	}
 	toGraph() {
-		const start = new Node(null);
-		const end = new Node(null);
+		const start = new Node();
+		const end = new Node();
 		const [element, delim] = this.children.map(child => child.toGraph());
 		start.connect(element.start);
 		if (!this.required) start.connect(end);
@@ -310,8 +408,8 @@ class ListAST extends AST {
 
 class OptionalAST extends AST {
 	toGraph() {
-		const start = new Node(null);
-		const end = new Node(null);
+		const start = new Node();
+		const end = new Node();
 		const graph = this.children[0].toGraph();
 		start.connect(graph.start);
 		start.connect(end);
@@ -326,8 +424,8 @@ class RepeatAST extends AST {
 		this.required = required;
 	}
 	toGraph() {
-		const start = new Node(null);
-		const end = new Node(null);
+		const start = new Node();
+		const end = new Node();
 
 		const graph = this.children[0].toGraph();
 		graph.end.connect(graph.start);
@@ -351,8 +449,8 @@ class SequenceAST extends AST {
 
 class OptionsAST extends AST {
 	toGraph() {
-		const start = new Node(null);
-		const end = new Node(null);
+		const start = new Node();
+		const end = new Node();
 		for (const option of this.children) {
 			const graph = option.toGraph();
 			start.connect(graph.start);
@@ -527,10 +625,12 @@ function compile(source) {
 
 	const regex = [];
 	const json = { graphs: { } };
+	const types = { };
 	for (const key in definitions) {
 		const value = definitions[key];
 		if (value instanceof TokenType) {
 			regex.push([key, value.regex, value.js]);
+			types[key] = [value.regex, value.js];
 			delete definitions[key];
 		} else {
 			const graph = value.toGraph();
@@ -538,15 +638,15 @@ function compile(source) {
 			definitions[key] = graph;
 		}
 	}
-	
-	for (const key in definitions) {
-		const graph = definitions[key];
-		graph.computeInitialReferences(definitions);
-		graph.computeTerminals(definitions);
-	}
+
+	for (const key in definitions)
+		definitions[key].removeInitialRecursion();
+
+	for (const key in definitions)
+		definitions[key].categorize(definitions, types);
 	
 	for (const key in definitions)
-		definitions[key].removeInitialRecursion(definitions);
+		definitions[key].computeFastChoices();
 
 	for (const key in definitions)
 		json.graphs[key] = definitions[key].flatten();
