@@ -237,9 +237,6 @@ class Graph {
 		};
 		return getInitialNodes(this.start);
 	}
-	copy() {
-		return Graph.hydrate(this.flatten());
-	}
 	forEach(fn) {
 		this.start.forEach(fn);
 	}
@@ -259,17 +256,6 @@ class Graph {
 
 		for (const node of toRemove)
 			node.merge();
-	}
-	preprocess(definitions, asts) {
-		this.astClass = asts[this.name];
-		this.forEach(node => {
-			if (node.reference)
-				if (!node.terminal) node.match = definitions[node.match];
-			for (const key in node.typeChoices)
-				node.typeChoices[key] = node.typeChoices[key].map(index => node.to[index]);
-			for (const key in node.literalChoices)
-				node.literalChoices[key] = node.literalChoices[key].map(index => node.to[index]);
-		});
 	}
 	categorize(definitions, types) {
 		this._definitions = definitions;
@@ -353,25 +339,6 @@ class Graph {
 			start, end,
 			name: this.name
 		};
-	}
-	static hydrate(graph) {
-		const nodes = graph.nodes.map(node => {
-			const result = new Node(node.match);
-			Object.assign(result, node);
-			result.baseTo = node.to;
-			result.to = [];
-			return result;
-		});
-
-		for (const node of nodes) {
-			for (const dst of node.baseTo)
-				node.connect(nodes[dst]);
-			delete node.baseTo;
-		}
-		
-		const result = new Graph(null, nodes[graph.start], nodes[graph.end]);
-		result.name = graph.name;
-		return result;
 	}
 }
 
@@ -659,7 +626,7 @@ function compile(source) {
 	for (const key in definitions)
 		json.graphs[key] = definitions[key].flatten();
 
-	fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
+	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
 	const ASTExtensions = Object.values(definitions)
 		.map(graph => {
@@ -678,8 +645,7 @@ function compile(source) {
 				.join(", ")
 		}]`,
 		definitionNames: JSON.stringify(Object.keys(definitions)),
-		TokenStream: readFile(BASE_PATH + "/TokenStream.js") + "\n" + readFile(BASE_PATH + "/Format.js"),
-		Graph, Node,
+		TokenStream: readFile(BASE_PATH + "/Format.js") + Token + TokenStreamBuilder,
 		ASTExtensions,
 		definitions: JSON.stringify(JSON.stringify(json.graphs)),
 	};

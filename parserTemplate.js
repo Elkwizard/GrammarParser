@@ -137,12 +137,43 @@ const parse = (function () {
 		}
 	}
 	
-	$Graph
+	class Graph {
+		constructor(name, start, end, nodes) {
+			this.name = name;
+			this.start = start;
+			this.end = end;
+			this.nodes = nodes;
+		}
+		preprocess() {
+			this.astClass = AST[this.name];
+			for (const node of this.nodes) {
+				if (node.reference)
+					if (!node.terminal) node.match = definitions[node.match];
+				for (const key in node.typeChoices)
+					node.typeChoices[key] = node.typeChoices[key].map(index => node.to[index]);
+				for (const key in node.literalChoices)
+					node.literalChoices[key] = node.literalChoices[key].map(index => node.to[index]);
+			}
+		}
+		static hydrate({ nodes, start, end, name }) {
+			for (const node of nodes)
+				node.to = node.to.map(inx => nodes[inx]);
+			
+			return new Graph(name, nodes[start], nodes[end], nodes);
+		}
+	}
 	
-	$Node
-	
+	class TokenStream {
+		constructor(tokens) {
+			this.all = tokens;
+		}
+		remove(type) {
+			this.all = this.all.filter(tok => tok.type !== type);
+		}
+	}
+
 	$TokenStream
-	
+
 	const regex = $regex;
 	const types = { };
 	for (const pair of regex) {
@@ -157,7 +188,7 @@ const parse = (function () {
 		definitions[name] = Graph.hydrate(definitions[name]);
 
 	for (const name of definitionNames)
-		definitions[name].preprocess(definitions, AST);
+		definitions[name].preprocess();
 	
 	function parse(source) {
 		source = source.replace(/\r/g, "");
