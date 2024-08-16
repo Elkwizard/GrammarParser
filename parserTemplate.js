@@ -8,16 +8,24 @@ class AST {
 		this[AST.START_KEY] = startIndex;
 	}
 
+	set textContent(value) {
+		this._textContent = value;
+	}
+
 	get textContent() {
-		const { START_KEY, END_KEY, TOKENS_KEY } = AST;
-		if (!(START_KEY in this && END_KEY in this && TOKENS_KEY in this))
-			return "";
-		const start = this[TOKENS_KEY][this[START_KEY]];
-		const end = this[TOKENS_KEY][this[END_KEY]];
-		return start.source.slice(
-			start.position,
-			end.position + end.content.length
-		);
+		if (this._textContent === undefined) {
+			const { START_KEY, END_KEY, TOKENS_KEY } = AST;
+			if (!(START_KEY in this && END_KEY in this && TOKENS_KEY in this))
+				return "";
+			const start = this[TOKENS_KEY][this[START_KEY]];
+			const end = this[TOKENS_KEY][this[END_KEY]];
+			this._textContent = start.source.slice(
+				start.position,
+				end.position + end.content.length
+			);
+		}
+
+		return this._textContent;
 	}
 
 	finalize(tokens) {
@@ -25,7 +33,6 @@ class AST {
 		const replacement = this[REPLACE_KEY];
 		if (replacement && !Object.keys(this).length)
 			return this[REPLACE_KEY];
-		delete this[REPLACE_KEY];
 		this[TOKENS_KEY] = tokens;
 		return this;
 	}
@@ -33,12 +40,12 @@ class AST {
 	setProperty(node, value, index) {
 		const { REPLACE_KEY, END_KEY } = AST;
 		const key = node.label ?? REPLACE_KEY;
-		const array = node.repeated;
 
-		if (key in this) {
+		const current = this[key];
+		if (current !== undefined) {
 			if (key === REPLACE_KEY) this[REPLACE_KEY] = null;
-			else this[key].push(value);
-		} else this[key] = array ? [value] : value;
+			else current.push(value);
+		} else this[key] = node.repeated ? [value] : value;
 
 		this[END_KEY] = index;
 	}
@@ -53,25 +60,42 @@ class AST {
 	}
 
 	transformAll(transf) {
-		AST.transformAll(this, transf);
+		return AST.transformAll(this, transf);
 	}
 
 	transform(match, transf) {
-		this.transformAll(node => {
-			if (node instanceof match) return transf(node);
-			return node;
-		});
+		return this.transformAll(
+			node => node instanceof match ? transf(node) : node
+		);
 	}
 
 	forAll(fn) {
-		AST.forAll(this, fn);
+		return AST.forAll(this, fn);
 	}
 
 	forEach(match, fn) {
-		this.forAll(node => {
+		return this.forAll(node => {
 			if (node instanceof match) fn(node);
 		});
 	}
+
+	static make = new Proxy({}, {
+		get(_, key) {
+			const cls = AST[key];
+			const { labels } = cls;
+
+			return (...args) => {
+				const result = new cls();
+				const count = Math.min(labels.length, args.length);
+				for (let i = 0; i < count; i++) {
+					const value = args[i];
+					if (value !== undefined)
+						result[labels[i]] = value;
+				}
+				return result;
+			};
+		}
+	});
 
 	static is(value) {
 		return Array.isArray(value) || value instanceof AST;
@@ -160,8 +184,6 @@ const parse = (function () {
 			return null;
 		}
 
-		const OUT_OF_BOUNDS = "Unexpected end of input";
-	
 		function matchTerm(graph, index) {
 			termStack.push(graph.name);
 			const match = matchFromNode(new graph.astClass(index), graph.start, index);
@@ -171,42 +193,13 @@ const parse = (function () {
 				return null;
 	
 			match[0] = match[0].finalize(tokens);
-	
+
 			return match;
 		}
-
-		const MATCH_TYPES = [
-			(result, node, index) => {
-				return index;
-			}, (result, node, index) => {
-				const enclosed = result.copy().finalize();
-				result.clear();
-				result.setProperty(node, enclosed, index);
-				return index;
-			}, (result, node, index) => {
-				const term = matchTerm(node.match, index);
-				if (term === null) return null;
-				const end = term[1];
-				result.setProperty(node, term[0], end - 1);
-				return end;
-			}, (result, node, index) => {
-				const token = tokens[index];
-				if (!token) return error(OUT_OF_BOUNDS, index);
-				if (token.type.name !== node.match) return error(`Unexpected token, expected token of type '${node.match}'`, index);
-				result.setProperty(node, token.content, index);
-				return index + 1;
-			}, (result, node, index) => {
-				const token = tokens[index];
-				if (!token) return error(OUT_OF_BOUNDS, index);
-				if (token.content !== node.match) return error(`Unexpected token, expected '${node.match}'`, index);
-				result.setProperty(node, token.content, index);
-				return index + 1;
-			}
-		];
 	
 		function matchFromNode(result, node, index) {
 			while (true) {
-				const match = node.matchType ? matchNode(result, node, index) : index;
+				const match = matchNode(result, node, index);
 		
 				if (match === null)
 					return null;
@@ -238,90 +231,56 @@ const parse = (function () {
 				index = match;
 			}
 		}
-
+	
 		function matchNode(result, node, index) {
-			if (node.match === null) {
-				const enclosed = result.copy().finalize();
-				result.clear();
-				result.setProperty(node, enclosed, index);
+			const { match } = node;
+			
+			if (match === null) {
+				if (node.enclose) {
+					const enclosed = result.copy().finalize();
+					result.clear();
+					result.setProperty(node, enclosed, index);
+				}
 				return index;
 			}
+	
+			const token = tokens[index];
 
-			switch (node.matchType) {
-				case 2: {
-					const term = matchTerm(node.match, index);
+			if (!token) 
+				return error("Unexpected end of input", index);
+
+			let value;
+
+			if (node.reference) {
+				if (node.terminal) {
+					if (token.type.name === match) {
+						value = token.content;
+						index++;
+					} else return error(`Unexpected token, expected a token of type '${match}'`, index);
+				} else {
+					const term = matchTerm(match, index);
 					if (term === null) return null;
-					const end = term[1];
-					result.setProperty(node, term[0], end - 1);
-					return end;
+
+					value = term[0];
+					index = term[1];
 				}
-
-				default: {
-					const token = tokens[index];
-					if (!token) return "Unexpected end of input";
-
-					const failed = (node.terminal ? token.type.name : token.content) !== node.match;
-					if (failed) return null;
-					// if (node.matchType === 3) {
-					// 	if (token.type.name !== node.match) return error(`Unexpected token, expected token of type '${node.match}'`, index);
-					// } else {
-					// 	if (token.content !== node.match) return error(`Unexpected token, expected '${node.match}'`, index);
-					// }
-
-					result.setProperty(node, token.content, index);
-					
-					return index + 1;
-				}
+			} else {
+				if (token.content === match) {
+					value = token.content;
+					index++;
+				} else return error(`Unexpected token, expected '${match}'`, index);
 			}
+
+			result.setProperty(node, value, index - 1);
+	
+			return index;
 		}
-	
-		// function matchNode(result, node, index) {
-		// 	const { match } = node;
-			
-		// 	if (!match) {
-		// 		if (node.enclose) {
-		// 			const enclosed = result.copy().finalize();
-		// 			result.clear();
-		// 			result.setProperty(node, enclosed, index);
-		// 		}
-		// 		return index;
-		// 	}
-	
-		// 	const token = tokens[index];
-
-		// 	if (!token) 
-		// 		return error("Unexpected end of input", index);
-
-		// 	let value;
-
-		// 	if (node.reference) {
-		// 		if (node.terminal) {
-		// 			if (token.type.name === match) {
-		// 				value = token.content;
-		// 				index++;
-		// 			} else return error(`Unexpected token, expected a token of type '${match}'`, index);
-		// 		} else {
-		// 			const term = matchTerm(match, index);
-		// 			if (term === null) return null;
-		// 			else [value, index] = term;
-		// 		}
-		// 	} else {
-		// 		if (token.content === match) {
-		// 			value = token.content;
-		// 			index++;
-		// 		} else return error(`Unexpected token, expected '${match}'`, index);
-		// 	}
-
-		// 	result.setProperty(node, value, index - 1);
-	
-		// 	return index;
-		// }
 	
 		const result = matchTerm(definitions.root, 0);
 	
 		if (result === null)
 			lastError.show();
-	
+
 		return result[0];
 	}
 

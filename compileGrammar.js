@@ -62,31 +62,40 @@ class Node {
 	}
 	get canComplete() {
 		if (this._canComplete === undefined) {
-			if (!this.match) {
-				if (this.to.length === 0) this._canComplete = true;
-				else this._canComplete = this.to.some(node => node.canComplete);
-			} else this._canComplete = false;
+			if (this === this._graph.end) this._canComplete = true;
+			else this._canComplete = this.to.some(node => !node.match && node.canComplete);
 		}
 
 		return this._canComplete;
 	}
 	get initialTerminals() {
-		if (this._computingTerminals) return [];
 		if (!this._initialTerminals) {
-			this._computingTerminals = true;
-			if (!this.match) {
-				if (this === this._graph.end)
-					this._initialTerminals = this._graph._references
-						.flatMap(ref => ref.to.flatMap(node => node.initialTerminals));
-				else this._initialTerminals = this.to.flatMap(node => node.initialTerminals);
-			} else if (!this.reference || this.terminal)
-				this._initialTerminals = [this];
-			else
-				this._initialTerminals = this._definitions[this.match].start.initialTerminals;
-			this._computingTerminals = false;
+			this._initialTerminals = this.computeInitialTerminals();
 		}
 
 		return this._initialTerminals;
+	}
+	computeInitialTerminals() {
+		if (this._computingTerminals) return [];
+		this._computingTerminals = true;
+		const result = this.getInitialTerminals();
+		this._computingTerminals = false;
+		return result;
+	}
+	getInitialTerminals() {
+		if (this._initialTerminals) return this._initialTerminals;
+		
+		if (!this.match) {
+			if (this === this._graph.end)
+				return this._graph._references
+					.flatMap(ref => ref.to.flatMap(node => node.computeInitialTerminals()));
+			return this.to.flatMap(node => node.computeInitialTerminals());
+		}
+
+		if (!this.reference || this.terminal)
+			return [this];
+		
+		return this._definitions[this.match].start.computeInitialTerminals();
 	}
 	get initialLiterals() {
 		return new Set(
@@ -265,6 +274,7 @@ class Graph {
 	categorize(definitions, types) {
 		this._definitions = definitions;
 		this._types = types;
+		this.labels = new Set();
 		this.forEach(node => {
 			node._definitions = definitions;
 			node._types = types;
@@ -272,16 +282,9 @@ class Graph {
 			if (node.reference && !(node.match in definitions))
 				node.terminal = true;
 
-			if (!node.match) {
-				if (node.enclose) node.matchType = 1;
-				else node.matchType = 0;
-			} else if (node.reference) {
-				if (node.terminal) node.matchType = 3;
-				else node.matchType = 2;
-			} else {
-				node.matchType = 4;
-			}
+			if (node.label) this.labels.add(node.label);
 		});
+		this.labels = [...this.labels];
 		this._references = [];
 		for (const key in definitions) {
 			const graph = definitions[key];
@@ -338,13 +341,18 @@ class Graph {
 			const node = { };
 			const source = nodes[i];
 			for (const key in source)
-				if (key[0] !== "_" && key !== "from")
+				if (key[0] !== "_")
 					node[key] = source[key];
 			node.to = node.to.map(node => nodes.indexOf(node));
+			delete node.from;
 			result.push(node);
 		}
 
-		return { nodes: result, start, end, name: this.name };
+		return {
+			nodes: result,
+			start, end,
+			name: this.name
+		};
 	}
 	static hydrate(graph) {
 		const nodes = graph.nodes.map(node => {
@@ -653,6 +661,13 @@ function compile(source) {
 
 	fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
+	const ASTExtensions = Object.values(definitions)
+		.map(graph => {
+			const { name, labels } = graph;
+			return `AST.${name} = class ${name} extends AST { static labels = ${JSON.stringify(labels)}; }`;
+		})
+		.join("\n");
+
 	const templatePath = path.join(path.dirname(process.argv[1]), "parserTemplate.js");
 
 	let templateJS = fs.readFileSync(templatePath, "utf-8");
@@ -665,9 +680,7 @@ function compile(source) {
 		definitionNames: JSON.stringify(Object.keys(definitions)),
 		TokenStream: readFile(BASE_PATH + "/TokenStream.js") + "\n" + readFile(BASE_PATH + "/Format.js"),
 		Graph, Node,
-		ASTExtensions: Object.keys(definitions)
-			.map(def => `AST.${def} = class ${def} extends AST { };`)
-			.join("\n"),
+		ASTExtensions,
 		definitions: JSON.stringify(JSON.stringify(json.graphs)),
 	};
 	for (const key in replacements)
