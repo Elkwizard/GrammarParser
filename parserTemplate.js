@@ -30,9 +30,14 @@ class AST {
 
 	finalize(tokens) {
 		const { REPLACE_KEY, TOKENS_KEY } = AST;
+
+		const { replace } = this;
+		if (replace) return replace;
+
 		const replacement = this[REPLACE_KEY];
 		if (replacement && !Object.keys(this).length)
-			return this[REPLACE_KEY];
+			return replacement;
+
 		this[TOKENS_KEY] = tokens;
 		return this;
 	}
@@ -65,7 +70,7 @@ class AST {
 
 	transform(match, transf) {
 		return this.transformAll(
-			node => node instanceof match ? transf(node) : node
+			node => AST.match(node, match) ? transf(node) : node
 		);
 	}
 
@@ -75,7 +80,7 @@ class AST {
 
 	forEach(match, fn) {
 		return this.forAll(node => {
-			if (node instanceof match) fn(node);
+			if (AST.match(node, match)) fn(node);
 		});
 	}
 
@@ -96,6 +101,11 @@ class AST {
 			};
 		}
 	});
+
+	static match(node, cls) {
+		if (Array.isArray(cls)) return cls.some(one => node instanceof one);
+		return node instanceof cls;
+	}
 
 	static is(value) {
 		return Array.isArray(value) || value instanceof AST;
