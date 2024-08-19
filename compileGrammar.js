@@ -86,9 +86,10 @@ class Node {
 		if (this._initialTerminals) return this._initialTerminals;
 		
 		if (!this.match) {
-			if (this === this._graph.end)
+			if (!this.to.length) {
 				return this._graph._references
 					.flatMap(ref => ref.to.flatMap(node => node.computeInitialTerminals()));
+			}
 			return this.to.flatMap(node => node.computeInitialTerminals());
 		}
 
@@ -170,7 +171,7 @@ class Node {
 		for (const from of this.from)
 			from.replaceConnection(this, graph.start);
 		for (const to of this.to)
-			graph.end.connect(to);
+			to.replaceConnectionIn(this, graph.end);
 	}
 	becomeStart() {
 		for (const from of this.from)
@@ -193,7 +194,7 @@ class Node {
 			to.from.splice(to.from.indexOf(this), 1, ...this.from);
 	}
 	validConnection(to) {
-		return this.match || this !== to;
+		return !!this.match || this !== to;
 	}
 	replaceConnection(find, replace) {
 		if (find === replace) return;
@@ -201,6 +202,13 @@ class Node {
 		this.to.splice(this.to.indexOf(find), 1, ...(valid ? [replace] : []));
 		find.from.splice(find.from.indexOf(this), 1);
 		if (valid) replace.from.push(this);
+	}
+	replaceConnectionIn(find, replace) {
+		if (find === replace) return;
+		const valid = replace.validConnection(this);
+		this.from.splice(this.from.indexOf(find), 1, ...(valid ? [replace] : []));
+		find.to.splice(find.to.indexOf(this), 1);
+		if (valid) replace.to.push(this);
 	}
 	connect(to) {
 		if (!this.validConnection(to)) return;
@@ -256,6 +264,12 @@ class Graph {
 
 		for (const node of toRemove)
 			node.merge();
+
+		while (!this.start.match && this.start.to.length === 1) {
+			const next = this.start.to[0];
+			this.start.becomeEnd();
+			this.start = next;
+		}
 	}
 	categorize(definitions, types) {
 		this._definitions = definitions;
@@ -304,6 +318,47 @@ class Graph {
 		end.connect(this.end);
 
 		this.simplify();
+		
+		while (true) {
+			const toJoin = [];
+
+			this.forEach(node => {
+				const { to } = node;
+				
+				if (to.length <= 1) return;
+
+				for (let i = 1; i < to.length; i++) {
+					const a = to[i - 1];
+					const b = to[i];
+					if (
+						a.reference !== b.reference ||
+						a.match !== b.match ||
+						!a.match || !b.match
+					) return;
+				}
+
+				toJoin.push(node);
+			});
+
+			if (!toJoin.length) break;
+
+			for (const node of toJoin) {
+				const to = [...node.to];
+				const rep = to[0];
+				const joined = new Node(rep.match);
+				joined.reference = rep.reference;
+
+				for (const next of to) {
+					next.match = null;
+					if (next.label) next.enclose = true;
+					next.replaceConnectionIn(node, joined);
+				}
+
+				node.connect(joined);
+			}
+
+			this.simplify();
+		}
 	}
 	computeFastChoices() {
 		this.forEach(node => node.computeFastChoices());

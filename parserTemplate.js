@@ -65,6 +65,11 @@ class AST {
 		for (const key in this)
 			delete this[key];
 	}
+	
+	from(node) {
+		this.textContent = node.textContent;
+		return this;
+	}
 
 	transformAll(transf) {
 		return AST.transformAll(this, transf);
