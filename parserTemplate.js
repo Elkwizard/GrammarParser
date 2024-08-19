@@ -3,29 +3,31 @@ class AST {
 	static START_KEY = Symbol("start");
 	static END_KEY = Symbol("end");
 	static TOKENS_KEY = Symbol("tokens");
+	
+	#textContent;
 
 	constructor(startIndex) {
 		this[AST.START_KEY] = startIndex;
 	}
 
 	set textContent(value) {
-		this._textContent = value;
+		this.#textContent = value;
 	}
 
 	get textContent() {
-		if (this._textContent === undefined) {
+		if (this.#textContent === undefined) {
 			const { START_KEY, END_KEY, TOKENS_KEY } = AST;
 			if (!(START_KEY in this && END_KEY in this && TOKENS_KEY in this))
 				return "";
 			const start = this[TOKENS_KEY][this[START_KEY]];
 			const end = this[TOKENS_KEY][this[END_KEY]];
-			this._textContent = start.source.slice(
+			this.#textContent = start.source.slice(
 				start.position,
 				end.position + end.content.length
 			);
 		}
 
-		return this._textContent;
+		return this.#textContent;
 	}
 
 	finalize(tokens) {
@@ -80,7 +82,8 @@ class AST {
 
 	forEach(match, fn) {
 		return this.forAll(node => {
-			if (AST.match(node, match)) fn(node);
+			if (AST.match(node, match))
+				return fn(node);
 		});
 	}
 
@@ -123,10 +126,10 @@ class AST {
 	}
 
 	static forAll(node, fn) {
+		if (fn(node) === false) return;
 		if (AST.is(node))
 			for (const key in node)
 				AST.forAll(node[key], fn);
-		fn(node);
 	}
 }
 
