@@ -262,8 +262,10 @@ const parse = (function () {
 				const token = tokens[match];
 				let { to } = node;
 				if (token) {
-					to = node.literalChoices[token.content] ?? node.typeChoices[token.type.name];
-					if (to === undefined)
+					to = node.literalChoices[token.content];
+					if (to === undefined || typeof to !== "object")
+						to = node.typeChoices[token.type.name];
+					if (to === undefined || typeof to !== "object")
 						return error("Unexpected token", match);
 					
 					if (to.length > 1) {
