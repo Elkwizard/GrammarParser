@@ -288,7 +288,7 @@ const parse = (function () {
 			
 			if (match === null) {
 				if (node.enclose) {
-					const enclosed = result.copy().finalize();
+					const enclosed = result.copy().finalize(tokens);
 					result.clear();
 					result.setProperty(node, enclosed, index);
 				}
