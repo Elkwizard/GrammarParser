@@ -92,6 +92,82 @@ class AST {
 		});
 	}
 
+	#print(printer, repeat) {
+		if (typeof printer === "string")
+			return [printer];
+
+		if (Array.isArray(printer)) {
+			const result = [];
+			for (const element of printer)
+				result.push(...this.#print(element, repeat));
+			return result;
+		}
+
+		if (printer.key) {
+			const value = this[printer.key];
+			
+			let result;
+			if (repeat) {
+				result = value?.[repeat.index];
+				repeat.value = result;
+			} else {
+				result = value;
+			}
+
+			if (result !== undefined && printer.type) {
+				const Type = AST[printer.type];
+				if (Type && !(result instanceof Type)) {
+					const ast = new Type();
+					ast.replace = result;
+					return [ast];
+				}
+			}
+
+			return [result];
+		}
+
+		if (printer.options) {
+			for (const option of printer.options)
+				if (option[0].some(key => this[key]))
+					return this.#print(option[1], repeat);
+			for (const option of printer.options) {
+				const { key, type } = option[1];
+				const ast = AST[type];
+				const value = this[key];
+				if (
+					(!ast && typeof value === "string") ||
+					(ast && value && ast.replacements.includes(value.constructor.name))
+				) return this.#print(option[1], repeat);
+			}
+			return this.#print(printer.options.at(-1)[1], repeat);
+		}
+
+		if (printer.repeat) {
+			const repeat = { index: 0, value: null };
+			const result = [];
+			while (true) {
+				const step = this.#print(printer.repeat, repeat);
+				if (repeat.value === undefined) break;
+
+				if (repeat.index && printer.delimiter) {
+					repeat.index--;
+					result.push(...this.#print(printer.delimiter, repeat));
+					repeat.index++;
+				}
+
+				result.push(...step);
+				repeat.index++;
+			}
+			return result;
+		}
+
+		console.log(printer);
+	}
+
+	toString() {
+		return this.#print(this.constructor.printer).join(" ");
+	}
+
 	static make = new Proxy({}, {
 		get(_, key) {
 			const cls = AST[key];
@@ -200,10 +276,13 @@ const parse = (function () {
 		pair[1] = types[name];
 	}
 	
-	const definitions = JSON.parse($definitions);
+	const { definitions, printers, replacements } = JSON.parse($json);
 	const definitionNames = $definitionNames;
-	for (const name of definitionNames)
+	for (const name of definitionNames) {
 		definitions[name] = Graph.hydrate(definitions[name]);
+		AST[name].printer = printers[name];
+		AST[name].replacements = replacements[name];
+	}
 
 	for (const name of definitionNames)
 		definitions[name].preprocess();

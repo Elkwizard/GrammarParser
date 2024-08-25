@@ -402,19 +402,62 @@ class AST {
 		this.label = null;
 		this.children = children;
 	}
+	get replaceableWith() {
+		return this.children.flatMap(child => child.replaceableWith);
+	}
+	get labels() {
+		return [...new Set(this.children.flatMap(child => child.labels))];
+	}
+	toPrinter() {
+		return [];
+	}
+	static replaceableClosure(key, replacements, found = new Set()) {
+		found.add(key);
+
+		if (key in replacements)
+			for (const replace of replacements[key]) {
+				if (!found.has(replace))
+					AST.replaceableClosure(replace, replacements, found);
+			}
+
+		return found;
+	}
 }
 
 class ReferenceAST extends AST {
+	get replaceableWith() {
+		return this.label && this.label !== "replace" ? [] : [this.children[0]];
+	}
+	get labels() {
+		return this.label && this.label !== "replace" ? [this.label] : [];
+	}
 	toGraph() {
 		const node = new Node(this.children[0]);
 		node.reference = true;
 		return new Graph(this.label, node);
 	}
+	toPrinter() {
+		return {
+			key: this.label ?? "replace",
+			type: this.children[0]
+		};
+	}
 }
 
 class LiteralAST extends AST {
+	get replaceableWith() {
+		return [];
+	}
+	get labels() {
+		return this.label ? [this.label] : [];
+	}
 	toGraph() {
 		return new Graph(this.label, new Node(this.children[0]))
+	}
+	toPrinter() {
+		return this.label ? {
+			key: this.label
+		} : this.children[0];
 	}
 }
 
@@ -434,6 +477,10 @@ class ListAST extends AST {
 		delim.end.connect(element.start);
 		return new Graph(this.label, start, end, true);
 	}
+	toPrinter() {
+		const [repeat, delimiter] = this.children.map(child => child.toPrinter());
+		return { repeat, delimiter };
+	}
 }
 
 class OptionalAST extends AST {
@@ -445,6 +492,15 @@ class OptionalAST extends AST {
 		start.connect(end);
 		graph.end.connect(end);
 		return new Graph(this.label, start, end);
+	}
+	toPrinter() {
+		const child = this.children[0];
+		const { labels } = child;
+		const printer = child.toPrinter();
+		if (!labels.length) return printer;
+		return {
+			options: [[labels, printer], [[], []]]
+		};
 	}
 }
 
@@ -466,6 +522,11 @@ class RepeatAST extends AST {
 
 		return new Graph(this.label, start, end, true);
 	}
+	toPrinter() {
+		return {
+			repeat: this.children[0].toPrinter()
+		};
+	}
 }
 
 class SequenceAST extends AST {
@@ -474,6 +535,9 @@ class SequenceAST extends AST {
 		for (let i = 0; i < graphs.length - 1; i++)
 			graphs[i].end.connect(graphs[i + 1].start);
 		return new Graph(this.label, graphs[0].start, graphs.at(-1).end);
+	}         
+	toPrinter() {
+		return this.children.map(child => child.toPrinter());
 	}
 }
 
@@ -487,6 +551,28 @@ class OptionsAST extends AST {
 			graph.end.connect(end);
 		}
 		return new Graph(this.label, start, end);
+	}
+	toPrinter() {
+		const options = this.children
+			.map(child => [child.labels, child.toPrinter()]);
+		
+		if (!options.length) return null;
+		if (options.length === 1) return options[0][1];
+
+		const commonLabels = new Set(options[0][0]);
+		for (let i = 1; i < options.length; i++) {
+			const labels = options[i][0];
+			const missing = [...commonLabels].filter(label => !labels.includes(label));
+			for (const label of missing)
+				commonLabels.delete(label);
+		}
+
+		for (const option of options)
+			option[0] = option[0].filter(option => !commonLabels.has(option));
+
+		options.reverse();
+
+		return { options };
 	}
 }
 
@@ -654,7 +740,11 @@ function compile(source) {
 	const definitions = parse(tokenize(source));
 
 	const regex = [];
-	const json = { graphs: { } };
+	const json = {
+		definitions: { },
+		printers: { },
+		replacements: { }
+	};
 	const types = { };
 	for (const key in definitions) {
 		const value = definitions[key];
@@ -666,11 +756,19 @@ function compile(source) {
 			const graph = value.toGraph();
 			graph.name = key;
 			definitions[key] = graph;
+			json.printers[key] = value.toPrinter();
+			json.replacements[key] = value.replaceableWith;
 		}
 	}
 
-	for (const key in definitions)
+	const replacementClosures = { };
+
+	for (const key in definitions) {
 		definitions[key].removeInitialRecursion();
+		replacementClosures[key] = [...AST.replaceableClosure(key, json.replacements)];
+	}
+
+	json.replacements = replacementClosures;
 
 	for (const key in definitions)
 		definitions[key].categorize(definitions, types);
@@ -679,9 +777,9 @@ function compile(source) {
 		definitions[key].computeFastChoices();
 
 	for (const key in definitions)
-		json.graphs[key] = definitions[key].flatten();
+		json.definitions[key] = definitions[key].flatten();
 
-	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
+	fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
 	const ASTExtensions = Object.values(definitions)
 		.map(graph => {
@@ -702,7 +800,7 @@ function compile(source) {
 		definitionNames: JSON.stringify(Object.keys(definitions)),
 		TokenStream: readFile(BASE_PATH + "/Format.js") + Token + TokenStreamBuilder,
 		ASTExtensions,
-		definitions: JSON.stringify(JSON.stringify(json.graphs)),
+		json: JSON.stringify(JSON.stringify(json)),
 	};
 	for (const key in replacements)
 		templateJS = templateJS.replace("$" + key, replacements[key].toString());
