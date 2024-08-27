@@ -92,6 +92,13 @@ class AST {
 		});
 	}
 
+	#getPrintKey(key, repeat) {
+		const value = this[key];
+		if (repeat)
+			return repeat.value = value?.[repeat.index];
+		return value; 
+	}
+
 	#print(printer, repeat) {
 		if (typeof printer === "string")
 			return [`\x1b[${/^\W+$/.test(printer) ? 36 : 35}m${printer}\x1b[0m`];
@@ -104,15 +111,7 @@ class AST {
 		}
 
 		if (printer.key) {
-			const value = this[printer.key];
-			
-			let result;
-			if (repeat) {
-				result = value?.[repeat.index];
-				repeat.value = result;
-			} else {
-				result = value;
-			}
+			const result = this.#getPrintKey(printer.key, repeat);
 
 			if (result !== undefined && printer.type) {
 				const Type = AST[printer.type];
@@ -130,13 +129,15 @@ class AST {
 			for (const option of printer.options)
 				if (option[0].some(key => this[key]))
 					return this.#print(option[1], repeat);
+			const p = this instanceof AST.Object;
 			for (const option of printer.options) {
 				const { key, type } = option[1];
 				const ast = AST[type];
-				const value = this[key];
+				const value = this.#getPrintKey(key, repeat);
+				if (!value) continue;
 				if (
 					(!ast && typeof value === "string") ||
-					(ast && value && ast.replacements.includes(value.constructor.name))
+					(ast && ast.replacements.includes(value.constructor.name))
 				) return this.#print(option[1], repeat);
 			}
 			return this.#print(printer.options.at(-1)[1], repeat);

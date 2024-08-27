@@ -59,42 +59,10 @@ class Node {
 		this.to = [];
 		this.label = null;
 		this.enclose = false;
-	}
-	get canComplete() {
-		if (this._canComplete === undefined) {
-			if (this === this._graph.end) this._canComplete = true;
-			else this._canComplete = this.to.some(node => !node.match && node.canComplete);
-		}
-
-		return this._canComplete;
+		this._initialTerminals = new Set();
 	}
 	get initialTerminals() {
-		this._initialTerminals ??= this.computeInitialTerminals();
-
-		return this._initialTerminals;
-	}
-	computeInitialTerminals() {
-		if (this._computingTerminals) return [];
-		this._computingTerminals = true;
-		const result = this.getInitialTerminals();
-		this._computingTerminals = false;
-		return result;
-	}
-	getInitialTerminals() {
-		if (this._initialTerminals) return this._initialTerminals;
-		
-		if (!this.match) {
-			if (!this.to.length) {
-				return this._graph._references
-					.flatMap(ref => ref.to.flatMap(node => node.computeInitialTerminals()));
-			}
-			return this.to.flatMap(node => node.computeInitialTerminals());
-		}
-
-		if (!this.reference || this.terminal)
-			return [this];
-		
-		return this._definitions[this.match].start.computeInitialTerminals();
+		return [...this._initialTerminals];
 	}
 	get initialLiterals() {
 		return new Set(
@@ -114,11 +82,7 @@ class Node {
 		return new Set(
 			this.initialTerminals
 				.filter(node => !node.reference || node.terminal)
-				.flatMap(node => {
-					const { match } = node;
-					if (node.terminal) return [match];
-					return this.literalTypes(match);
-				})
+				.flatMap(({ match, terminal }) => terminal ? [match] : this.literalTypes(match))
 		);
 	}
 	literalTypes(match) {
@@ -131,6 +95,20 @@ class Node {
 			}
 		}
 		return types;
+	}
+	propagateTerminal(target = this) {
+		if (target._initialTerminals.has(this)) return;
+		target._initialTerminals.add(this);
+
+		if (target === target._graph.start)
+			for (const reference of target._graph._references)
+				this.propagateTerminal(reference);
+
+		for (let from of target.from) {
+			if (from.reference && !from.terminal)
+				from = this._definitions[from.match].end;
+			if (!from.match) this.propagateTerminal(from);
+		}
 	}
 	computeFastChoices() {
 		{ // types
@@ -358,8 +336,13 @@ class Graph {
 			this.simplify();
 		}
 	}
+	computeInitialTerminals() {
+		this.forEach(node => {
+			if (node.match && (!node.reference || node.terminal))
+				node.propagateTerminal();
+		});
+	}
 	computeFastChoices() {
-		console.log("#", this.name);
 		this.forEach(node => node.computeFastChoices());
 	}
 	flatten() {
@@ -826,13 +809,11 @@ function compile(source) {
 	for (const key in definitions)
 		AST.sortOptions(json.printers[key], json.replacements);
 
-	// for (const key in definitions)
-	// 	json.definitions[key] = definitions[key].flatten();
-
-	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
-
 	for (const key in definitions)
 		definitions[key].categorize(definitions, types);
+
+	for (const key in definitions)
+		definitions[key].computeInitialTerminals();
 	
 	for (const key in definitions)
 		definitions[key].computeFastChoices();
@@ -840,7 +821,7 @@ function compile(source) {
 	for (const key in definitions)
 		json.definitions[key] = definitions[key].flatten();
 	
-	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
+	fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
 	const ASTExtensions = Object.values(definitions)
 		.map(graph => {
