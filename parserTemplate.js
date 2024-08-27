@@ -94,7 +94,7 @@ class AST {
 
 	#print(printer, repeat) {
 		if (typeof printer === "string")
-			return [printer];
+			return [`\x1b[${/^\W+$/.test(printer) ? 36 : 35}m${printer}\x1b[0m`];
 
 		if (Array.isArray(printer)) {
 			const result = [];
@@ -160,8 +160,6 @@ class AST {
 			}
 			return result;
 		}
-
-		console.log(printer);
 	}
 
 	toString() {

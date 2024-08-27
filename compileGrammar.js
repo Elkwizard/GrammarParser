@@ -32,7 +32,7 @@ function tokenize(source) {
 	source = source.replace(/\r/g, "");
 	
 	const SYMBOLS = [
-		..."=:|;[]*+?(){},"
+		..."=:|;[]*+?(){},$"
 	].sort((a, b) => b.length - a.length);
 	
 	const tokens = TokenStreamBuilder.regex(source, [
@@ -69,9 +69,7 @@ class Node {
 		return this._canComplete;
 	}
 	get initialTerminals() {
-		if (!this._initialTerminals) {
-			this._initialTerminals = this.computeInitialTerminals();
-		}
+		this._initialTerminals ??= this.computeInitialTerminals();
 
 		return this._initialTerminals;
 	}
@@ -361,6 +359,7 @@ class Graph {
 		}
 	}
 	computeFastChoices() {
+		console.log("#", this.name);
 		this.forEach(node => node.computeFastChoices());
 	}
 	flatten() {
@@ -411,6 +410,14 @@ class AST {
 	toPrinter() {
 		return [];
 	}
+	resolve(definitions) {
+		for (let i = 0; i < this.children.length; i++) {
+			const resolved = this.children[i].resolve(definitions);
+			if (!resolved) return null;
+			this.children[i] = resolved;
+		}
+		return this;
+	}
 	static replaceableClosure(key, replacements, found = new Set()) {
 		found.add(key);
 
@@ -422,6 +429,28 @@ class AST {
 
 		return found;
 	}
+	static sortOptions(printer, replacements) {
+		if (typeof printer === "string" || printer.key) return;
+		if (Array.isArray(printer))
+			for (const el of printer)
+				AST.sortOptions(el, replacements);
+		else if (printer.repeat) {
+			AST.sortOptions(printer.repeat, replacements);
+			if (printer.delimiter)
+				AST.sortOptions(printer.delimiter, replacements);
+		} else if (printer.options) {
+			const score = opt => opt[0].length ? 0 : 1 + (replacements[opt[1].type]?.length ?? 0);
+			printer.options.sort((a, b) => score(a) - score(b));
+			for (const option of printer.options)
+				AST.sortOptions(option, replacements);
+		}
+	}
+}
+
+class VariableAST extends AST {
+	resolve(definitions) {
+		return definitions[this.children[0]] ?? null;
+	}
 }
 
 class ReferenceAST extends AST {
@@ -430,6 +459,9 @@ class ReferenceAST extends AST {
 	}
 	get labels() {
 		return this.label && this.label !== "replace" ? [this.label] : [];
+	}
+	resolve() {
+		return this;
 	}
 	toGraph() {
 		const node = new Node(this.children[0]);
@@ -450,6 +482,9 @@ class LiteralAST extends AST {
 	}
 	get labels() {
 		return this.label ? [this.label] : [];
+	}
+	resolve() {
+		return this;
 	}
 	toGraph() {
 		return new Graph(this.label, new Node(this.children[0]))
@@ -570,8 +605,6 @@ class OptionsAST extends AST {
 		for (const option of options)
 			option[0] = option[0].filter(option => !commonLabels.has(option));
 
-		options.reverse();
-
 		return { options };
 	}
 }
@@ -581,6 +614,9 @@ class TokenType {
 		this.literals = literals;
 		this.regex = regex;
 		this.js = js;
+	}
+	resolve(definitions) {
+		return this;
 	}
 }
 
@@ -598,6 +634,8 @@ function parse(tokens) {
 		
 		if (tokens.has("("))
 			value = parseExpression(tokens.endOf("(", ")"), label);
+		else if (tokens.optional("$"))
+			value = new VariableAST(tokens.next(TYPE.IDENTIFIER));
 		else {
 			if (tokens.has(TYPE.IDENTIFIER)) {
 				let name = tokens.next();
@@ -733,6 +771,21 @@ function parse(tokens) {
 		}
 	}
 
+	const result = { };
+	const total = Object.keys(definitions).length;
+	let count = 0;
+	while (count !== total) {
+		for (const key in definitions) {
+			if (key in result) continue;
+			const def = definitions[key];
+			const resolved = def.resolve(result);
+			if (resolved) {
+				result[key] = resolved;
+				count++;
+			}
+		}
+	}
+
 	return definitions;
 }
 
@@ -767,24 +820,32 @@ function compile(source) {
 		definitions[key].removeInitialRecursion();
 		replacementClosures[key] = [...AST.replaceableClosure(key, json.replacements)];
 	}
-
+	
 	json.replacements = replacementClosures;
+
+	for (const key in definitions)
+		AST.sortOptions(json.printers[key], json.replacements);
+
+	// for (const key in definitions)
+	// 	json.definitions[key] = definitions[key].flatten();
+
+	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
 	for (const key in definitions)
 		definitions[key].categorize(definitions, types);
 	
 	for (const key in definitions)
 		definitions[key].computeFastChoices();
-
+	
 	for (const key in definitions)
 		json.definitions[key] = definitions[key].flatten();
-
-	fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
+	
+	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
 	const ASTExtensions = Object.values(definitions)
 		.map(graph => {
 			const { name, labels } = graph;
-			return `AST.${name} = class ${name} extends AST { static labels = ${JSON.stringify(labels)}; }`;
+			return `AST.${name} = class ${name} extends AST { static labels = ${JSON.stringify(labels)}; };`;
 		})
 		.join("\n");
 
