@@ -81,27 +81,28 @@ class AST {
 		);
 	}
 
-	forAll(fn) {
-		return AST.forAll(this, fn);
+	forAll(fn, afterFn) {
+		AST.forAll(this, fn, afterFn);
 	}
 
-	forEach(match, fn) {
-		return this.forAll(node => {
+	forEach(match, fn, afterFn) {
+		this.forAll(node => {
 			if (AST.match(node, match))
 				return fn(node);
-		});
+		}, afterFn ? node => {
+			if (AST.match(node, match))
+				afterFn(node);
+		} : undefined);
 	}
 
 	#getPrintKey(key, repeat) {
 		const value = this[key];
-		if (repeat)
-			return repeat.value = value?.[repeat.index];
-		return value; 
+		return repeat ? value?.[repeat.index] : value; 
 	}
 
 	#print(printer, repeat) {
 		if (typeof printer === "string")
-			return [`\x1b[${/^\W+$/.test(printer) ? 36 : 35}m${printer}\x1b[0m`];
+			return [printer];
 
 		if (Array.isArray(printer)) {
 			const result = [];
@@ -112,6 +113,7 @@ class AST {
 
 		if (printer.key) {
 			const result = this.#getPrintKey(printer.key, repeat);
+			if (repeat) repeat.value = result;
 
 			if (result !== undefined && printer.type) {
 				const Type = AST[printer.type];
@@ -129,7 +131,6 @@ class AST {
 			for (const option of printer.options)
 				if (option[0].some(key => this[key]))
 					return this.#print(option[1], repeat);
-			const p = this instanceof AST.Object;
 			for (const option of printer.options) {
 				const { key, type } = option[1];
 				const ast = AST[type];
@@ -195,21 +196,26 @@ class AST {
 	}
 
 	static transformAll(node, transf) {
-		if (AST.is(node))
+		const result = transf(node);
+		if (result === false) return node;
+		node = result;
+		if (AST.is(node)) {
 			for (const key in node) {
-				const result = AST.transformAll(node[key], transf);
+				const init = node[key];
+				const result = AST.transformAll(init, transf);
 				if (result === false) delete node[key];
-				else node[key] = result;
+				else if (result !== init) node[key] = result;
 			}
-		node = transf(node);
+		}
 		return node;
 	}
 
-	static forAll(node, fn) {
+	static forAll(node, fn, afterFn) {
 		if (fn(node) === false) return;
 		if (AST.is(node))
 			for (const key in node)
-				AST.forAll(node[key], fn);
+				AST.forAll(node[key], fn, afterFn);
+		afterFn?.(node);
 	}
 }
 

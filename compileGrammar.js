@@ -401,6 +401,16 @@ class AST {
 		}
 		return this;
 	}
+	addLabel(label) {
+		for (const child of this.children)
+			child.addLabel(label);
+	}
+	copy() {
+		const result = new this.constructor();
+		Object.assign(result, this);
+		result.children = result.children.map(child => child.copy?.() ?? child);
+		return result;
+	}
 	static replaceableClosure(key, replacements, found = new Set()) {
 		found.add(key);
 
@@ -432,19 +442,29 @@ class AST {
 
 class VariableAST extends AST {
 	resolve(definitions) {
-		return definitions[this.children[0]] ?? null;
+		const def = this.children[0];
+		if (!(def in definitions)) return null;
+		const copy = definitions[def].copy();
+		if (this.label) copy.addLabel(this.label);
+		return copy;
 	}
 }
 
-class ReferenceAST extends AST {
+class TerminalAST extends AST {
+	addLabel(label) {
+		this.label = label;
+	}
+	resolve() {
+		return this;
+	}
+}
+
+class ReferenceAST extends TerminalAST {
 	get replaceableWith() {
 		return this.label && this.label !== "replace" ? [] : [this.children[0]];
 	}
 	get labels() {
 		return this.label && this.label !== "replace" ? [this.label] : [];
-	}
-	resolve() {
-		return this;
 	}
 	toGraph() {
 		const node = new Node(this.children[0]);
@@ -459,15 +479,12 @@ class ReferenceAST extends AST {
 	}
 }
 
-class LiteralAST extends AST {
+class LiteralAST extends TerminalAST {
 	get replaceableWith() {
 		return [];
 	}
 	get labels() {
 		return this.label ? [this.label] : [];
-	}
-	resolve() {
-		return this;
 	}
 	toGraph() {
 		return new Graph(this.label, new Node(this.children[0]))
@@ -617,10 +634,10 @@ function parse(tokens) {
 		
 		if (tokens.has("("))
 			value = parseExpression(tokens.endOf("(", ")"), label);
-		else if (tokens.optional("$"))
-			value = new VariableAST(tokens.next(TYPE.IDENTIFIER));
 		else {
-			if (tokens.has(TYPE.IDENTIFIER)) {
+			if (tokens.optional("$")) {
+				value = new VariableAST(tokens.next(TYPE.IDENTIFIER));
+			} else if (tokens.has(TYPE.IDENTIFIER)) {
 				let name = tokens.next();
 				if (name === "last") name = lastAlias;
 				value = new ReferenceAST(name);
