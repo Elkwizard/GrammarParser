@@ -164,8 +164,14 @@ class AST {
 		}
 	}
 
+	joinStrings(strs) {
+		return strs.join(" ");
+	}
+
 	toString() {
-		return this.#print(this.constructor.printer).join(" ");
+		return this.joinStrings(
+			this.#print(this.constructor.printer).map(String)
+		);
 	}
 
 	static make = new Proxy({}, {
