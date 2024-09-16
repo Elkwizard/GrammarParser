@@ -124,7 +124,7 @@ class AST {
 				}
 			}
 
-			return [result];
+			return [result ?? ""];
 		}
 
 		if (printer.options) {
@@ -135,7 +135,7 @@ class AST {
 				const { key, type } = option[1];
 				const ast = AST[type];
 				const value = this.#getPrintKey(key, repeat);
-				if (!value) continue;
+				if (value === undefined) continue;
 				if (
 					(!ast && typeof value === "string") ||
 					(ast && ast.replacements.includes(value.constructor.name))
@@ -281,6 +281,7 @@ const parse = (function () {
 
 	const regex = $regex;
 	const types = { };
+	const hidden = new Set($hidden);
 	for (const pair of regex) {
 		const name = pair[1];
 		types[name] = { name, toString: () => name };
@@ -298,14 +299,11 @@ const parse = (function () {
 	for (const name of definitionNames)
 		definitions[name].preprocess();
 	
-	function parse(source) {
+	function parse(source, showError = true) {
 		source = source.replace(/\r/g, "");
 		const stream = TokenStreamBuilder.regex(source, regex);
-
-		if ("comment" in types)
-			stream.remove(types.comment);
 		
-		const tokens = stream.all;
+		const tokens = stream.all.filter(token => !hidden.has(token.type.name));
 
 		let lastErrorPosition = -1;
 		let lastError = null;
@@ -323,9 +321,21 @@ const parse = (function () {
 			return null;
 		}
 
+		function makeIndent(add) {
+			const colors = ["magenta", "cyan", "blue", "yellow"];
+			const count = add ? makeIndent.count++ : --makeIndent.count;
+			let result = "";
+			for (let i = 0; i < count; i++)
+				result += color(colors[i % colors.length], "│ ");
+			return result;
+		}
+		makeIndent.count = 0;
+
 		function matchTerm(graph, index) {
 			termStack.push(graph.name);
+			// console.log(`${makeIndent(true)}├ ${graph.name}?`);
 			const match = matchFromNode(new graph.astClass(index), graph.start, index);
+			// console.log(`${makeIndent(false)}├ ${match === null ? color("red", "no.") : color("green", "yes!")}`);
 			termStack.pop();
 	
 			if (match === null)
@@ -382,6 +392,7 @@ const parse = (function () {
 					result.clear();
 					result.setProperty(node, enclosed, index);
 				}
+
 				return index;
 			}
 	
@@ -419,8 +430,10 @@ const parse = (function () {
 	
 		const result = matchTerm(definitions.root, 0);
 	
-		if (result === null)
-			lastError.show();
+		if (result === null) {
+			if (showError) lastError.show();
+			else throw lastError;
+		}
 
 		return result[0];
 	}

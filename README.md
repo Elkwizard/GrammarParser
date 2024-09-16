@@ -42,6 +42,7 @@ The basic matches can be combined through a variety of different features:
 * `A|B` matches `A` or `B`, prioritizing `A`
 * `A[B]` will match as many `A` as possible, requiring a `B` between each one. (if `{B}` is used instead of `[B]`, this is required to match at least one `A`)
 * `(...)` can be used to group symbols
+* `?` after a quantifier (`?`, `+`, `*`, `{...}`, `[...]`) will make it match as few instances as possible
 
 ## Result
 The compiler, `compileGrammar.js`, takes two arguments, a `.grammar` file path, and a `.js` file path. The `.js` path represents the destination for the compiled output.

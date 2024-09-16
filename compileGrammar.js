@@ -32,11 +32,11 @@ function tokenize(source) {
 	source = source.replace(/\r/g, "");
 	
 	const SYMBOLS = [
-		..."=:|;[]*+?(){},$"
+		..."=:|;*+?[](){}<>,$"
 	].sort((a, b) => b.length - a.length);
 	
 	const tokens = TokenStreamBuilder.regex(source, [
-		[/^(\/\*(.*?)\*\/|\/\/[^\n]*)/s, TYPE.COMMENT],
+		[/^(\s+|\/\*(.*?)\*\/|\/\/[^\n]*)/s, TYPE.COMMENT],
 		[/^\(match, tokens\) => \{(.*?)\n\}/s, TYPE.JS],
 		[/^(["'])((\\.)*(.*?))*?\1/, TYPE.STRING],
 		[/^\/((\\.)*(.*?))*?\//, TYPE.REGEX],
@@ -251,6 +251,7 @@ class Graph {
 		this._definitions = definitions;
 		this._types = types;
 		this.labels = new Set();
+		const repeated = new Map();
 		this.forEach(node => {
 			node._definitions = definitions;
 			node._types = types;
@@ -258,9 +259,18 @@ class Graph {
 			if (node.reference && !(node.match in definitions))
 				node.terminal = true;
 
-			if (node.label) this.labels.add(node.label);
+			if (node.label) {
+				this.labels.add(node.label);
+				repeated.set(node.label, node.repeated || repeated.get(node.label));
+			}
 		});
 		this.labels = [...this.labels];
+
+		this.forEach(node => {
+			if (node.label && repeated.get(node.label))
+				node.repeated = true;
+		});
+		
 		this._references = [];
 		for (const key in definitions) {
 			const graph = definitions[key];
@@ -383,6 +393,7 @@ class AST {
 	constructor(...children) {
 		this.label = null;
 		this.children = children;
+		this.resolved = false;
 	}
 	get replaceableWith() {
 		return this.children.flatMap(child => child.replaceableWith);
@@ -394,11 +405,13 @@ class AST {
 		return [];
 	}
 	resolve(definitions) {
-		for (let i = 0; i < this.children.length; i++) {
-			const resolved = this.children[i].resolve(definitions);
-			if (!resolved) return null;
-			this.children[i] = resolved;
-		}
+		if (this.resolved) return this;
+
+		for (let i = 0; i < this.children.length; i++)
+			this.children[i] = this.children[i].resolve(definitions);
+
+		this.resolved = this.children.every(child => child.resolved);
+
 		return this;
 	}
 	addLabel(label) {
@@ -440,31 +453,64 @@ class AST {
 	}
 }
 
+class ParameterAST {
+	constructor(name, defaultValue = null) {
+		this.name = name;
+		this.defaultValue = defaultValue;
+	}
+}
+
+class FunctionAST extends AST {
+	constructor(...children) {
+		super(...children);
+		this.resolved = true;
+	}
+}
+
 class VariableAST extends AST {
 	resolve(definitions) {
-		const def = this.children[0];
-		if (!(def in definitions)) return null;
-		const copy = definitions[def].copy();
+		const name = this.children[0];
+		if (!(name in definitions)) {
+			for (let i = 1; i < this.children.length; i++)
+				this.children[i] = this.children[i].resolve(definitions);
+			return this;
+		}
+		
+		const def = definitions[name];
+
+		let copy;
+		if (def instanceof FunctionAST) {
+			const [body, ...parameters] = def.children;
+			const defs = { };
+			for (let i = 0; i < parameters.length; i++)
+				defs[parameters[i].name] = this.children[i + 1] ?? parameters[i].defaultValue;
+			copy = body.copy().resolve(defs);
+		} else copy = def.copy();
+
 		if (this.label) copy.addLabel(this.label);
+
+		copy = copy.resolve(definitions);
+
 		return copy;
 	}
 }
 
 class TerminalAST extends AST {
+	constructor(...children) {
+		super(...children);
+		this.resolved = true;
+	}
+	get labels() {
+		return this.label && this.label !== "replace" ? [this.label] : [];
+	}
 	addLabel(label) {
 		this.label = label;
-	}
-	resolve() {
-		return this;
 	}
 }
 
 class ReferenceAST extends TerminalAST {
 	get replaceableWith() {
 		return this.label && this.label !== "replace" ? [] : [this.children[0]];
-	}
-	get labels() {
-		return this.label && this.label !== "replace" ? [this.label] : [];
 	}
 	toGraph() {
 		const node = new Node(this.children[0]);
@@ -483,11 +529,8 @@ class LiteralAST extends TerminalAST {
 	get replaceableWith() {
 		return [];
 	}
-	get labels() {
-		return this.label ? [this.label] : [];
-	}
 	toGraph() {
-		return new Graph(this.label, new Node(this.children[0]))
+		return new Graph(this.label, new Node(this.children[0]));
 	}
 	toPrinter() {
 		return this.label ? {
@@ -500,6 +543,7 @@ class ListAST extends AST {
 	constructor(required, ...children) {
 		super(...children);
 		this.required = required;
+		this.lazy = false;
 	}
 	toGraph() {
 		const start = new Node();
@@ -507,8 +551,9 @@ class ListAST extends AST {
 		const [element, delim] = this.children.map(child => child.toGraph());
 		start.connect(element.start);
 		if (!this.required) start.connect(end);
+		if (this.lazy) element.end.connect(end);
 		element.end.connect(delim.start);
-		element.end.connect(end);
+		if (!this.lazy) element.end.connect(end);
 		delim.end.connect(element.start);
 		return new Graph(this.label, start, end, true);
 	}
@@ -519,12 +564,17 @@ class ListAST extends AST {
 }
 
 class OptionalAST extends AST {
+	constructor(...children) {
+		super(...children);
+		this.lazy = false;
+	}
 	toGraph() {
 		const start = new Node();
 		const end = new Node();
 		const graph = this.children[0].toGraph();
+		if (this.lazy) start.connect(end);
 		start.connect(graph.start);
-		start.connect(end);
+		if (!this.lazy) start.connect(end);
 		graph.end.connect(end);
 		return new Graph(this.label, start, end);
 	}
@@ -532,10 +582,9 @@ class OptionalAST extends AST {
 		const child = this.children[0];
 		const { labels } = child;
 		const printer = child.toPrinter();
-		if (!labels.length) return printer;
-		return {
-			options: [[labels, printer], [[], []]]
-		};
+		const options = [[labels, printer], [[], []]];
+		if (this.lazy) options.reverse();
+		return { options };
 	}
 }
 
@@ -543,14 +592,16 @@ class RepeatAST extends AST {
 	constructor(required, ...children) {
 		super(...children);
 		this.required = required;
+		this.lazy = false;
 	}
 	toGraph() {
 		const start = new Node();
 		const end = new Node();
 
 		const graph = this.children[0].toGraph();
+		if (this.lazy) graph.end.connect(end);
 		graph.end.connect(graph.start);
-		graph.end.connect(end);
+		if (!this.lazy) graph.end.connect(end);
 		start.connect(graph.start);
 
 		if (!this.required) start.connect(end);
@@ -590,7 +641,7 @@ class OptionsAST extends AST {
 	toPrinter() {
 		const options = this.children
 			.map(child => [child.labels, child.toPrinter()]);
-		
+
 		if (!options.length) return null;
 		if (options.length === 1) return options[0][1];
 
@@ -610,10 +661,12 @@ class OptionsAST extends AST {
 }
 
 class TokenType {
-	constructor(literals, regex, js) {
+	constructor(hidden, literals, regex, js) {
+		this.hidden = hidden;
 		this.literals = literals;
 		this.regex = regex;
 		this.js = js;
+		this.resolved = true;
 	}
 	resolve(definitions) {
 		return this;
@@ -640,7 +693,12 @@ function parse(tokens) {
 			} else if (tokens.has(TYPE.IDENTIFIER)) {
 				let name = tokens.next();
 				if (name === "last") name = lastAlias;
-				value = new ReferenceAST(name);
+				if (tokens.has("<")) {
+					const args = tokens
+						.endOf("<", ">")
+						.delimitedList(parseExpression, ",");
+					value = new VariableAST(name, ...args);
+				} else value = new ReferenceAST(name);
 			} else {
 				const literal = JSON.parse(tokens.next(TYPE.STRING));
 				literals.add(literal);
@@ -659,6 +717,9 @@ function parse(tokens) {
 			else if (tokens.has("["))
 				value = new ListAST(false, value, parseExpression(tokens.endOf("[", "]")));
 			else value = new ListAST(true, value, parseExpression(tokens.endOf("{", "}")));
+			
+			if (tokens.optional("?"))
+				value.lazy = true;
 		}
 
 		return value;
@@ -666,14 +727,15 @@ function parse(tokens) {
 
 	function parseSequence(tokens, label = null) {
 		const pieces = [];
-		while (tokens.length && !tokens.has("|"))
+		while (tokens.length && !tokens.hasAny("|", ","))
 			pieces.push(parseSimpleExpression(tokens, label));
 		if (pieces.length === 1) return pieces[0];
 		return new SequenceAST(...pieces);
 	}
 
 	function parseExpression(tokens, label = null) {
-		if (tokens.has("literals") || tokens.has(TYPE.REGEX)) {
+		if (tokens.has("literals") || tokens.has("hidden") || tokens.has(TYPE.REGEX)) {
+			const hidden = tokens.optional("hidden");
 			const literals = tokens.optional("literals");
 			
 			let regex = tokens.next(TYPE.REGEX).slice(1, -1);
@@ -683,27 +745,38 @@ function parse(tokens) {
 			if (tokens.optional("and"))
 				js = tokens.next(TYPE.JS);
 
-			return new TokenType(literals, new RegExp(regex), js);
+			return new TokenType(hidden, literals, new RegExp(regex), js);
 		}
 
 		const options = tokens.delimitedList(
-			tokens => parseSequence(tokens, label), "|"
+			tokens => parseSequence(tokens, label), "|", ","
 		);
 		if (options.length === 1) return options[0];
 		return new OptionsAST(...options);
 	}
 
 	function parseDefinition(definitions, name, tokens) {
-		if (tokens.optional("operators")) {
+		if (tokens.has("<")) {
+			const params = tokens
+				.endOf("<", ">")
+				.delimitedList(tok => {
+					const name = tok.next(TYPE.IDENTIFIER);
+					if (tok.optional("="))
+						return ParameterAST(name, parseExpression(tok));
+					return new ParameterAST(name);
+				}, ",");
+			definitions[name] = new FunctionAST(parseExpression(tokens), ...params);
+		} else if (tokens.optional("operators")) {
 			const base = tokens.next(TYPE.IDENTIFIER);
 
 			const content = tokens.endOf("{", "}");
 			const operators = [];
 			while (content.length) {
 				const type = content.next(TYPE.IDENTIFIER);
+				const lazy = content.optional("?");
 				const name = content.next(TYPE.IDENTIFIER);
 				const operator = content.endOf("(", ")");
-				operators.push({ type, name, operator });
+				operators.push({ type, lazy, name, operator });
 			}
 
 			for (let i = 0; i < operators.length; i++) {
@@ -735,10 +808,14 @@ function parse(tokens) {
 					operatorExpr = new SequenceAST(...sequence);
 				}
 
-				definitions[op.name] = new OptionsAST(
+				const def = new OptionsAST(
 					operatorExpr,
 					new ReferenceAST(lastAlias)
 				);
+
+				if (op.lazy) def.children.reverse();
+
+				definitions[op.name] = def;
 			}
 
 			definitions[name] = new ReferenceAST(operators.at(-1).name);
@@ -777,16 +854,20 @@ function parse(tokens) {
 	while (count !== total) {
 		for (const key in definitions) {
 			if (key in result) continue;
-			const def = definitions[key];
-			const resolved = def.resolve(result);
-			if (resolved) {
-				result[key] = resolved;
+			const res = definitions[key].resolve(result);
+			if (res.resolved) {
 				count++;
+				result[key] = res;
 			}
 		}
 	}
 
-	return definitions;
+	for (const key in result)
+		if (result[key] instanceof FunctionAST)
+			delete result[key];
+
+
+	return result;
 }
 
 function compile(source) {
@@ -799,11 +880,13 @@ function compile(source) {
 		replacements: { }
 	};
 	const types = { };
+	const hidden = [];
 	for (const key in definitions) {
 		const value = definitions[key];
 		if (value instanceof TokenType) {
 			regex.push([key, value.regex, value.js]);
 			types[key] = [value.regex, value.js];
+			if (value.hidden) hidden.push(key);
 			delete definitions[key];
 		} else {
 			const graph = value.toGraph();
@@ -859,6 +942,7 @@ function compile(source) {
 		definitionNames: JSON.stringify(Object.keys(definitions)),
 		TokenStream: readFile(BASE_PATH + "/Format.js") + Token + TokenStreamBuilder,
 		ASTExtensions,
+		hidden: JSON.stringify(hidden),
 		json: JSON.stringify(JSON.stringify(json)),
 	};
 	for (const key in replacements)
