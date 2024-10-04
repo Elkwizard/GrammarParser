@@ -247,10 +247,16 @@ class Graph {
 			this.start = next;
 		}
 	}
+	findLabels() {
+		this.labels = new Set();
+		this.forEach(node => {
+			if (node.label) this.labels.add(node.label);
+		})
+		this.labels = [...this.labels];
+	}
 	categorize(definitions, types) {
 		this._definitions = definitions;
 		this._types = types;
-		this.labels = new Set();
 		const repeated = new Map();
 		this.forEach(node => {
 			node._definitions = definitions;
@@ -259,12 +265,9 @@ class Graph {
 			if (node.reference && !(node.match in definitions))
 				node.terminal = true;
 
-			if (node.label) {
-				this.labels.add(node.label);
+			if (node.label)
 				repeated.set(node.label, node.repeated || repeated.get(node.label));
-			}
 		});
-		this.labels = [...this.labels];
 
 		this.forEach(node => {
 			if (node.label && repeated.get(node.label))
@@ -900,6 +903,7 @@ function compile(source) {
 	const replacementClosures = { };
 
 	for (const key in definitions) {
+		definitions[key].findLabels();
 		definitions[key].removeInitialRecursion();
 		replacementClosures[key] = [...AST.replaceableClosure(key, json.replacements)];
 	}

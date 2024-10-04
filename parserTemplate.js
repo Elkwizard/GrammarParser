@@ -235,7 +235,7 @@ const parse = (function () {
 			this.stack = stack;
 		}
 		show() {
-			const stack = "\n" + this.stack.map(line => `\tat ${line}`).join("\n");
+			const stack = "\n" + this.stack.map(line => `\tat ${line}`).reverse().join("\n");
 			if (this.token)
 				this.token.error(`${this.message} (at '${this.token.content}')${stack}`);
 			else throw new SyntaxError(this.message + stack);
