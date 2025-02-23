@@ -29,6 +29,18 @@ class AST {
 
 		return this.#textContent;
 	}
+	error(message) {
+		const tokens = this[AST.TOKENS_KEY];
+		
+		const startToken = tokens?.[this[AST.START_KEY]];
+		const endToken = tokens?.[this[AST.END_KEY]]
+		if (startToken) {
+			startToken.error(message, endToken, this.toString());
+			return true;
+		}
+		
+		throw new Error(message);
+	}
 
 	finalize(tokens) {
 		const { REPLACE_KEY, TOKENS_KEY } = AST;
@@ -193,12 +205,18 @@ class AST {
 	});
 
 	static match(node, cls) {
-		if (Array.isArray(cls)) return cls.some(one => node instanceof one);
-		return node instanceof cls;
+		if (Array.isArray(cls)) return cls.some(one => AST.match(node, one));
+		if (cls === AST || cls.prototype instanceof AST) return node instanceof cls;
+		if (typeof cls === "string") return node.constructor.categories?.has?.(cls);
+		return cls(node);
 	}
 
 	static is(value) {
 		return Array.isArray(value) || value instanceof AST;
+	}
+
+	static keys(node) {
+		return node.constructor.labels ?? Object.keys(node);
 	}
 
 	static transformAll(node, transf) {
@@ -206,8 +224,9 @@ class AST {
 		if (result === false) return node;
 		node = result;
 		if (AST.is(node)) {
-			for (const key in node) {
+			for (const key of AST.keys(node)) {
 				const init = node[key];
+				if (init === undefined) continue;
 				const result = AST.transformAll(init, transf);
 				if (result === false) delete node[key];
 				else if (result !== init) node[key] = result;
@@ -218,9 +237,13 @@ class AST {
 
 	static forAll(node, fn, afterFn) {
 		if (fn(node) === false) return;
-		if (AST.is(node))
-			for (const key in node)
-				AST.forAll(node[key], fn, afterFn);
+		if (AST.is(node)) {
+			for (const key of AST.keys(node)) {
+				const value = node[key];
+				if (value === undefined) continue;
+				AST.forAll(value, fn, afterFn);
+			}
+		}
 		afterFn?.(node);
 	}
 }

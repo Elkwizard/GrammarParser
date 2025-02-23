@@ -32,7 +32,7 @@ function tokenize(source) {
 	source = source.replace(/\r/g, "");
 	
 	const SYMBOLS = [
-		..."=:|;*+?[](){}<>,$"
+		..."=:|;*+?[](){}<>,$@"
 	].sort((a, b) => b.length - a.length);
 	
 	const tokens = TokenStreamBuilder.regex(source, [
@@ -758,7 +758,31 @@ function parse(tokens) {
 		return new OptionsAST(...options);
 	}
 
-	function parseDefinition(definitions, name, tokens) {
+	const categoryStack = [];
+	function parseCategoryBoundaries(tokens) {
+		while (tokens.optional("@")) {
+			if (tokens.optional("begin")) {
+				categoryStack.push(tokens.next(TYPE.IDENTIFIER));
+			} else if (tokens.optional("end")) {
+				categoryStack.pop();
+			}
+		}
+	}
+
+	const definitions = { };
+	function define(name, value) {
+		definitions[name] = value;
+		value.categories = [...categoryStack];
+	}
+
+	function untilDefinitionEnd(tokens) {
+		const toks = [];
+		while (tokens.length && !(tokens.has("=", 1) || tokens.has("@")))
+			toks.push(tokens.nextToken());
+		return new TokenStream(toks);
+	}
+
+	function parseDefinition(name, tokens) {
 		if (tokens.has("<")) {
 			const params = tokens
 				.endOf("<", ">")
@@ -768,40 +792,38 @@ function parse(tokens) {
 						return ParameterAST(name, parseExpression(tok));
 					return new ParameterAST(name);
 				}, ",");
-			definitions[name] = new FunctionAST(parseExpression(tokens), ...params);
+			const toks = untilDefinitionEnd(tokens);
+			define(name, new FunctionAST(parseExpression(toks), ...params));
 		} else if (tokens.optional("operators")) {
 			const base = tokens.next(TYPE.IDENTIFIER);
 
 			const content = tokens.endOf("{", "}");
-			const operators = [];
+
+			let lastAlias = base;
 			while (content.length) {
+				parseCategoryBoundaries(content);
 				const type = content.next(TYPE.IDENTIFIER);
 				const lazy = content.optional("?");
 				const name = content.next(TYPE.IDENTIFIER);
 				const operator = content.endOf("(", ")");
-				operators.push({ type, lazy, name, operator });
-			}
-
-			for (let i = 0; i < operators.length; i++) {
-				const op = operators[i];
-				lastAlias = i ? operators[i - 1].name : base;
+				parseCategoryBoundaries(content);
 
 				let operatorExpr;
 				
-				if (op.type === "custom")
-					operatorExpr = parseExpression(op.operator);
+				if (type === "custom")
+					operatorExpr = parseExpression(operator);
 				else {
 					const sequence = [
-						parseExpression(op.operator, "op"),
-						new ReferenceAST(op.name),
+						parseExpression(operator, "op"),
+						new ReferenceAST(name),
 					];
 
-					const binary = !op.type.endsWith("fix");
+					const binary = !type.endsWith("fix");
 
 					if (binary) sequence.unshift(new ReferenceAST(lastAlias));
 					else sequence[1].label = "target";
 
-					if (op.type === "left" || op.type === "suffix") sequence.reverse();
+					if (type === "left" || type === "suffix") sequence.reverse();
 
 					if (binary) {
 						sequence[0].label = "left";
@@ -816,26 +838,24 @@ function parse(tokens) {
 					new ReferenceAST(lastAlias)
 				);
 
-				if (op.lazy) def.children.reverse();
+				if (lazy) def.children.reverse();
 
-				definitions[op.name] = def;
+				define(name, def);
+				lastAlias = name;
 			}
 
-			definitions[name] = new ReferenceAST(operators.at(-1).name);
+			define(name, new ReferenceAST(lastAlias));
 		} else {
-			const expr = parseExpression(tokens);
-			definitions[name] = expr;
+			const toks = untilDefinitionEnd(tokens);
+			define(name, parseExpression(toks));
 		}
 	}
 
-	const definitions = { };
 	while (tokens.length) {
+		parseCategoryBoundaries(tokens);
 		const name = tokens.next(TYPE.IDENTIFIER);
 		tokens.next("=");
-		const toks = [];
-		while (tokens.length && !tokens.has("=", 1))
-			toks.push(tokens.nextToken());
-		parseDefinition(definitions, name, new TokenStream(toks));
+		parseDefinition(name, tokens);
 	}
 
 	for (const key in definitions) {
@@ -876,6 +896,7 @@ function parse(tokens) {
 function compile(source) {
 	const definitions = parse(tokenize(source));
 
+	const categories = { };
 	const regex = [];
 	const json = {
 		definitions: { },
@@ -893,6 +914,7 @@ function compile(source) {
 			delete definitions[key];
 		} else {
 			const graph = value.toGraph();
+			categories[key] = value.categories;
 			graph.name = key;
 			definitions[key] = graph;
 			json.printers[key] = value.toPrinter();
@@ -925,12 +947,12 @@ function compile(source) {
 	for (const key in definitions)
 		json.definitions[key] = definitions[key].flatten();
 	
-	fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
+	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
 
 	const ASTExtensions = Object.values(definitions)
 		.map(graph => {
 			const { name, labels } = graph;
-			return `AST.${name} = class ${name} extends AST { static labels = ${JSON.stringify(labels)}; };`;
+			return `AST.${name} = class ${name} extends AST { static labels = ${JSON.stringify(labels)}; static categories = new Set(${JSON.stringify(categories[name])}); };`;
 		})
 		.join("\n");
 
