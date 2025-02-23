@@ -799,7 +799,7 @@ function parse(tokens) {
 
 			const content = tokens.endOf("{", "}");
 
-			let lastAlias = base;
+			lastAlias = base;
 			while (content.length) {
 				parseCategoryBoundaries(content);
 				const type = content.next(TYPE.IDENTIFIER);
