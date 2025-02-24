@@ -34,6 +34,9 @@ The name of any term in the program can also be used to match that term.
 ### Labels
 To define the structure of the parse tree produced, pieces of a term's definition can be labeled. The labeled portion will then be included as a property on a node of the parse tree. Labels are applied with `label:A`, where when `A` is matched, it will be stored into `node.label`.
 
+### Categories
+All declarations can be placed between (potentially nested) category markers, of the form `@begin CategoryName ... @end`. AST nodes can be matched against which categories they fall into. 
+
 ### Operations & Quantifiers
 The basic matches can be combined through a variety of different features:
 * `A*` will match `A` 0 or more times

@@ -425,6 +425,7 @@ class AST {
 		const result = new this.constructor();
 		Object.assign(result, this);
 		result.children = result.children.map(child => child.copy?.() ?? child);
+		result.categories = this.categories;
 		return result;
 	}
 	static replaceableClosure(key, replacements, found = new Set()) {
@@ -489,6 +490,7 @@ class VariableAST extends AST {
 				defs[parameters[i].name] = this.children[i + 1] ?? parameters[i].defaultValue;
 			copy = body.copy().resolve(defs);
 		} else copy = def.copy();
+		copy.categories = this.categories;
 
 		if (this.label) copy.addLabel(this.label);
 
