@@ -322,7 +322,7 @@ const parse = (function () {
 	for (const name of definitionNames)
 		definitions[name].preprocess();
 	
-	function parse(source, showError = true) {
+	function parse(source, showError = true, term = "root") {
 		source = source.replace(/\r/g, "");
 		const stream = TokenStreamBuilder.regex(source, regex);
 		
@@ -451,7 +451,7 @@ const parse = (function () {
 			return index;
 		}
 	
-		const result = matchTerm(definitions.root, 0);
+		const result = matchTerm(definitions[term], 0);
 	
 		if (result === null) {
 			if (showError) lastError.show();
