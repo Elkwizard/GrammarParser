@@ -229,7 +229,13 @@ class AST {
 				if (init === undefined) continue;
 				const result = AST.transformAll(init, transf);
 				if (result === false) delete node[key];
-				else if (result !== init) node[key] = result;
+				else if (result !== init) {
+					if (Array.isArray(node) && Array.isArray(result)) {
+						node.splice(key, 1, ...result);
+					} else {
+						node[key] = result;
+					}
+				}
 			}
 		}
 		return node;
