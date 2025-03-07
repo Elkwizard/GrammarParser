@@ -4,7 +4,8 @@ A parser generator for my grammar file format (`.grammar`, though I'm sure it's 
 ## Example
 
 ```js
-symbol = /\W+/
+space = hidden /\s+/
+symbol = literals /\W+/
 word = /\w+/
 
 Sentence = words:word* "."
@@ -16,7 +17,7 @@ root = Sentence;
 ## Overview
 
 Grammars are defined as a series names with definitions. Definitions come in one of two types:
-1. Tokens: These are represented with a regular expression. This describes the pieces of the input source code that will be ascribed to each token type. By prefixing the Regex with `literals`, the token type will only match tokens that both match the Regex and appear in your grammar as literal strings. 
+1. Tokens: These are represented with a regular expression. This describes the pieces of the input source code that will be ascribed to each token type. By prefixing the Regex with `literals`, the token type will only match tokens that both match the Regex and appear in your grammar as literal strings. Prefixing the regex with `hidden` will cause the tokens in that category to be removed before parsing.
 2. Terms: These represent composite (and possibly recursive) combinations of tokens.
 
 A grammar must define a `root` term, which will be used as the starting point for all parsing.
@@ -43,9 +44,10 @@ The basic matches can be combined through a variety of different features:
 * `A+` will match `A` 1 or more times
 * `A?` will match `A`, or nothing
 * `A|B` matches `A` or `B`, prioritizing `A`
-* `A[B]` will match as many `A` as possible, requiring a `B` between each one. (if `{B}` is used instead of `[B]`, this is required to match at least one `A`)
+* `A[B]` will match as many `A` as possible, requiring a `B` between each one. (if `A{B}` is used instead of `A[B]`, this is required to match at least one `A`)
 * `(...)` can be used to group symbols
 * `?` after a quantifier (`?`, `+`, `*`, `{...}`, `[...]`) will make it match as few instances as possible
+* `$A` will expand inline to the definition of the term `A`
 
 ## Result
 The compiler, `compileGrammar.js`, takes two arguments, a `.grammar` file path, and a `.js` file path. The `.js` path represents the destination for the compiled output.
