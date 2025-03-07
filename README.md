@@ -33,7 +33,7 @@ There are two basic ways to match a token:
 The name of any term in the program can also be used to match that term.
 
 ### Labels
-To define the structure of the parse tree produced, pieces of a term's definition can be labeled. The labeled portion will then be included as a property on a node of the parse tree. Labels are applied with `label:A`, where when `A` is matched, it will be stored into `node.label`.
+To define the structure of the parse tree produced, pieces of a term's definition can be labeled. The labeled portion will then be included as a property on a node of the parse tree. Labels are applied with `label:A`, where when `A` is matched, it will be stored into `node.label`. One exception to this is the label `replace`; whatever `replace` binds to will replace the AST node it would have become a property of.
 
 ### Categories
 All declarations can be placed between (potentially nested) category markers, of the form `@begin CategoryName ... @end`. AST nodes can be matched against which categories they fall into. 
@@ -49,7 +49,19 @@ The basic matches can be combined through a variety of different features:
 * `?` after a quantifier (`?`, `+`, `*`, `{...}`, `[...]`) will make it match as few instances as possible
 * `$A` will expand inline to the definition of the term `A`
 
-## Result
+### Operator Blocks
+A term can be defined as an precedence-obeying expression containing multiple operators, using the following syntax:
+```js
+ExpressionTermName = operators MinimalTermName {
+	// operators
+}
+```
+The operators are specified in order from highest to lowest precedence, and fall into the following categories:
+* `left`/`right`: These are left/right associative binary operators. e.g. `left Sum ("+" | "-")`
+* `prefix`/`suffix`: These are pre/post-fix unary operators. e.g. `prefix Pre ("!" | "+" | "-" | "~")`.
+* `custom`: This allows the specification of a custom operator, such as a ternary or assignment operator. Within the scope of a `custom` operator, the special term `last` can be used to refer to the name of the last-defined operator (or the minimal term, if it's used in the first operator). e.g. `custom Ternary (condition:last "?" left:Expression ":" right:Ternary)`
+
+## CLI
 The compiler, `compileGrammar.js`, takes two arguments, a `.grammar` file path, and a `.js` file path. The `.js` path represents the destination for the compiled output.
 
 The resulting file contains two global variables, `class AST` and `function parse(source)`.
