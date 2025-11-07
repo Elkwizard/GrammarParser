@@ -971,7 +971,7 @@ function compile(source) {
 		TokenStream: readFile(BASE_PATH + "/Format.js") + Token + TokenStreamBuilder,
 		ASTExtensions,
 		hidden: JSON.stringify(hidden),
-		json: JSON.stringify(JSON.stringify(json)),
+		json: JSON.stringify(json),
 	};
 	for (const key in replacements)
 		templateJS = templateJS.replace("$" + key, replacements[key].toString());

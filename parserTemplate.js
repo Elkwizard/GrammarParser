@@ -29,6 +29,17 @@ class AST {
 
 		return this.#textContent;
 	}
+
+	get children() {
+		return this.constructor.labels
+			.flatMap(label => {
+				const child = this[label];
+				if (child === undefined) return [];
+				return Array.isArray(child) ? child : [child];
+			})
+			.filter(node => node instanceof AST);
+	}
+
 	error(message) {
 		const tokens = this[AST.TOKENS_KEY];
 		
@@ -38,8 +49,26 @@ class AST {
 			startToken.error(message, endToken, this.toString());
 			return true;
 		}
+
+		if (AST.debugRoot) {
+			const parentKey = Symbol("parent");
+			
+			AST.debugRoot.forEach(AST, node => {
+				for (const child of node.children) {
+					if (child instanceof AST) {
+						child[parentKey] = node;
+					}
+				}
+			});
+			
+			let node = this;
+			while (node && node[AST.TOKENS_KEY]?.[node[AST.START_KEY]] === undefined)
+				node = node[parentKey];
+
+			if (node) node.error(message);
+		}
 		
-		throw new Error(message);
+		throw new Error(`At '\x1b[41m${this}\x1b[0m':\n\n${message}`);
 	}
 
 	finalize(tokens) {
@@ -69,7 +98,16 @@ class AST {
 		this[END_KEY] = index;
 	}
 
+	removeMetadata() {
+		AST.removeMetadata(this);
+		return this;
+	}
+
 	copy() {
+		return AST.copy(this);
+	}
+
+	shallowCopy() {
 		return Object.assign(new this.constructor(), this);
 	}
 
@@ -79,7 +117,11 @@ class AST {
 	}
 	
 	from(node) {
-		this.textContent = node.textContent;
+		const oldLabels = new Set(node.constructor.labels);
+		for (const key of Reflect.ownKeys(node))
+			if (!oldLabels.has(key))
+				this[key] = node[key];
+		
 		return this;
 	}
 
@@ -193,6 +235,7 @@ class AST {
 
 			return (...args) => {
 				const result = new cls();
+				delete result[AST.START_KEY];
 				const count = Math.min(labels.length, args.length);
 				for (let i = 0; i < count; i++) {
 					const value = args[i];
@@ -203,6 +246,35 @@ class AST {
 			};
 		}
 	});
+
+	static removeMetadata(node) {
+		if (!AST.is(node)) return;
+		if (Array.isArray(node)) {
+			node.forEach(AST.removeMetadata);
+		} else {
+			const labels = new Set(node.constructor.labels);
+			for (const key of Reflect.ownKeys(node)) {
+				if (labels.has(key)) {
+					AST.removeMetadata(node[key]);
+				} else {
+					delete node[key];
+				}
+			}
+		}
+	}
+
+	static copy(node) {
+		if (!AST.is(node)) return node;
+		if (Array.isArray(node)) return node.map(AST.copy);
+		const result = new node.constructor();
+		for (const label of node.constructor.labels) {
+			const value = node[label];
+			if (value !== undefined) result[label] = AST.copy(value);
+		}
+		for (const key of [AST.START_KEY, AST.END_KEY, AST.TOKENS_KEY])
+			result[key] = node[key];
+		return result;
+	}
 
 	static match(node, cls) {
 		if (Array.isArray(cls)) return cls.some(one => AST.match(node, one));
@@ -216,7 +288,7 @@ class AST {
 	}
 
 	static keys(node) {
-		return node.constructor.labels ?? Object.keys(node);
+		return Array.isArray(node) ? node.keys() : node.constructor.labels;
 	}
 
 	static transformAll(node, transf) {
@@ -228,10 +300,11 @@ class AST {
 				const init = node[key];
 				if (init === undefined) continue;
 				const result = AST.transformAll(init, transf);
-				if (result === false) delete node[key];
-				else if (result !== init) {
+				if (result !== init) {
 					if (Array.isArray(node) && Array.isArray(result)) {
 						node.splice(key, 1, ...result);
+					} else if (Array.isArray(node) && result === undefined) {
+						node.splice(key, 1);
 					} else {
 						node[key] = result;
 					}
@@ -317,7 +390,7 @@ const parse = (function () {
 		pair[1] = types[name];
 	}
 	
-	const { definitions, printers, replacements } = JSON.parse($json);
+	const { definitions, printers, replacements } = $json;
 	const definitionNames = $definitionNames;
 	for (const name of definitionNames) {
 		definitions[name] = Graph.hydrate(definitions[name]);
@@ -399,7 +472,7 @@ const parse = (function () {
 					
 					if (to.length > 1) {
 						for (let i = 0; i < to.length; i++) {
-							const subMatch = matchFromNode(result.copy(), to[i], match);
+							const subMatch = matchFromNode(result.shallowCopy(), to[i], match);
 							if (subMatch !== null) return subMatch;
 						}
 
@@ -417,7 +490,7 @@ const parse = (function () {
 			
 			if (match === null) {
 				if (node.enclose) {
-					const enclosed = result.copy().finalize(tokens);
+					const enclosed = result.shallowCopy().finalize(tokens);
 					result.clear();
 					result.setProperty(node, enclosed, index);
 				}
