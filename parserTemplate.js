@@ -296,18 +296,30 @@ class AST {
 		if (result === false) return node;
 		node = result;
 		if (AST.is(node)) {
-			for (const key of AST.keys(node)) {
-				const init = node[key];
-				if (init === undefined) continue;
-				const result = AST.transformAll(init, transf);
-				if (result !== init) {
-					if (Array.isArray(node) && Array.isArray(result)) {
-						node.splice(key, 1, ...result);
-					} else if (Array.isArray(node) && result === undefined) {
-						node.splice(key, 1);
+			if (Array.isArray(node)) {
+				for (let i = 0; i < node.length; i++) {
+					const child = node[i];
+					if (child === undefined) continue;
+					const result = AST.transformAll(child, transf);
+					
+					if (child === result) continue;
+
+					if (result === undefined) {
+						node.splice(i, 1);
+						i--;
+					} else if (Array.isArray(result)) {
+						node.splice(i, 1, ...result);
+						i += result.length - 1;
 					} else {
-						node[key] = result;
+						node[i] = result;
 					}
+				}
+			} else {
+				for (const key of AST.keys(node)) {
+					const child = node[key];
+					if (child === undefined) continue;
+					const result = AST.transformAll(child, transf);
+					node[key] = result;
 				}
 			}
 		}

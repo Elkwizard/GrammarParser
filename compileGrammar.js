@@ -9,7 +9,7 @@ function importJS(source, exports) {
 	return eval(`${readFile(source)};({${exports.join(",")}});`);
 }
 
-const BASE_PATH = "G:/My Drive/Desktop/TokenStream/js"
+const BASE_PATH = "G:/My Drive/Desktop/TokenStream/js";
 
 const {
 	TokenStreamBuilder, TokenStream, Token
@@ -808,7 +808,6 @@ function parse(tokens) {
 				const lazy = content.optional("?");
 				const name = content.next(TYPE.IDENTIFIER);
 				const operator = content.endOf("(", ")");
-				parseCategoryBoundaries(content);
 
 				let operatorExpr;
 				
@@ -844,6 +843,8 @@ function parse(tokens) {
 
 				define(name, def);
 				lastAlias = name;
+				
+				parseCategoryBoundaries(content);
 			}
 
 			define(name, new ReferenceAST(lastAlias));
