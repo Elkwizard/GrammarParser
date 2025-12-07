@@ -40,6 +40,10 @@ class AST {
 			.filter(node => node instanceof AST);
 	}
 
+	get lineNumber() {
+		return this[AST.TOKENS_KEY]?.[this[AST.START_KEY]]?.lineNumber ?? -1;
+	}
+
 	error(message) {
 		const tokens = this[AST.TOKENS_KEY];
 		
@@ -54,11 +58,9 @@ class AST {
 			const parentKey = Symbol("parent");
 			
 			AST.debugRoot.forEach(AST, node => {
-				for (const child of node.children) {
-					if (child instanceof AST) {
+				for (const child of node.children)
+					if (child instanceof AST)
 						child[parentKey] = node;
-					}
-				}
 			});
 			
 			let node = this;
@@ -103,8 +105,8 @@ class AST {
 		return this;
 	}
 
-	copy() {
-		return AST.copy(this);
+	copy(copyMetadata) {
+		return AST.copy(this, copyMetadata);
 	}
 
 	shallowCopy() {
@@ -116,11 +118,10 @@ class AST {
 			delete this[key];
 	}
 	
-	from(node) {
-		const oldLabels = new Set(node.constructor.labels);
-		for (const key of Reflect.ownKeys(node))
-			if (!oldLabels.has(key))
-				this[key] = node[key];
+	from(node, endNode = node) {
+		this[AST.TOKENS_KEY] = node[AST.TOKENS_KEY];
+		this[AST.START_KEY] = node[AST.START_KEY];
+		this[AST.END_KEY] = endNode[AST.END_KEY];
 		
 		return this;
 	}
@@ -263,16 +264,31 @@ class AST {
 		}
 	}
 
-	static copy(node) {
-		if (!AST.is(node)) return node;
-		if (Array.isArray(node)) return node.map(AST.copy);
+	static copy(node, copyMetadata = () => null, found = new Map()) {
+		if (!AST.is(node)) {
+			found.set(node, node);
+			return node;
+		}
+		
+		if (Array.isArray(node)) {
+			const copy = [];
+			found.set(node, copy);
+			for (const element of node)
+				copy.push(AST.copy(element, copyMetadata, found));
+			return copy;
+		}
+
 		const result = new node.constructor();
+		found.set(node, result);
 		for (const label of node.constructor.labels) {
 			const value = node[label];
-			if (value !== undefined) result[label] = AST.copy(value);
+			if (value !== undefined) result[label] = AST.copy(value, copyMetadata, found);
 		}
+
 		for (const key of [AST.START_KEY, AST.END_KEY, AST.TOKENS_KEY])
 			result[key] = node[key];
+		copyMetadata(node, result, ref => found.get(ref) ?? ref);
+
 		return result;
 	}
 
