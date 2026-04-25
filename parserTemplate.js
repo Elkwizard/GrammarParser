@@ -429,9 +429,13 @@ const parse = (function () {
 	for (const name of definitionNames)
 		definitions[name].preprocess();
 	
-	function parse(source, showError = true, term = "root") {
+	function parse(source, {
+		showError = true,
+		term = "root",
+		filename
+	} = { }) {
 		source = source.replace(/\r/g, "");
-		const stream = TokenStreamBuilder.regex(source, regex);
+		const stream = TokenStreamBuilder.regex(source, regex, filename);
 		
 		const tokens = stream.all.filter(token => !hidden.has(token.type.name));
 
