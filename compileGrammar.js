@@ -974,8 +974,7 @@ function compile(source) {
 		hidden: JSON.stringify(hidden),
 		json: JSON.stringify(json),
 	};
-	for (const key in replacements)
-		templateJS = templateJS.replace("$" + key, replacements[key].toString());
+	templateJS = templateJS.replace(/\$(\w+)/g, (_, key) => replacements[key]);
 
 	return templateJS;
 }
