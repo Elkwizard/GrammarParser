@@ -316,13 +316,15 @@ class Graph {
 				
 				if (to.length <= 1) return;
 
-				for (let i = 1; i < to.length; i++) {
-					const a = to[i - 1];
-					const b = to[i];
+				const rep = to[0];
+
+				if (!rep.match) return;
+
+				for (const node of to) {
 					if (
-						a.reference !== b.reference ||
-						a.match !== b.match ||
-						!a.match || !b.match
+						node.reference !== rep.reference ||
+						node.match !== rep.match ||
+						node.from.length > 1
 					) return;
 				}
 
@@ -856,6 +858,7 @@ function parse(tokens) {
 
 	while (tokens.length) {
 		parseCategoryBoundaries(tokens);
+		if (!tokens.length) break;
 		const name = tokens.next(TYPE.IDENTIFIER);
 		tokens.next("=");
 		parseDefinition(name, tokens);
@@ -950,7 +953,15 @@ function compile(source) {
 	for (const key in definitions)
 		json.definitions[key] = definitions[key].flatten();
 	
-	// fs.writeFileSync("tree.json", JSON.stringify(json, undefined, 4), "utf-8");
+	
+	fs.writeFileSync(
+		path.join(
+			__dirname,
+			"../tree.json"
+		),
+		JSON.stringify(json, undefined, 4),
+		"utf-8"
+	);
 
 	const ASTExtensions = Object.values(definitions)
 		.map(graph => {
