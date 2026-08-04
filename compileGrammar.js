@@ -1,5 +1,7 @@
 const fs = require("fs");
 const path = require("path");
+const { TokenStreamBuilder, TokenStream, Token } = require("./tokenStream");
+const { color, background, indent } = require("./format");
 
 function readFile(path) {
 	return fs.readFileSync(path, "utf-8");
@@ -8,19 +10,6 @@ function readFile(path) {
 function importJS(source, exports) {
 	return eval(`${readFile(source)};({${exports.join(",")}});`);
 }
-
-const BASE_PATH = "G:/My Drive/Desktop/TokenStream/js";
-
-const {
-	TokenStreamBuilder, TokenStream, Token
-} = importJS(`${BASE_PATH}/TokenStream.js`, [
-	"TokenStream", "Token", "TokenStreamBuilder"
-]);
-const {
-	color, background, indent	
-} = importJS(`${BASE_PATH}/Format.js`, [
-	"color", "background", "indent"
-]);
 
 const defineEnum = (...names) => Object.fromEntries(names.map(name => [name, Symbol(name)]));
 
@@ -980,7 +969,7 @@ function compile(source) {
 				.join(", ")
 		}]`,
 		definitionNames: JSON.stringify(Object.keys(definitions)),
-		TokenStream: readFile(BASE_PATH + "/Format.js") + Token + TokenStreamBuilder,
+		TokenStream: readFile(`${__dirname}/format.js`) + Token + TokenStreamBuilder,
 		ASTExtensions,
 		hidden: JSON.stringify(hidden),
 		json: JSON.stringify(json),

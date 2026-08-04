@@ -407,6 +407,7 @@ const parse = (function () {
 		}
 	}
 
+	const module = { };
 	$TokenStream
 
 	const regex = $regex;
